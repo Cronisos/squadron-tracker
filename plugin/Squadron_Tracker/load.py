@@ -18,7 +18,7 @@ from config import appname, config
 from monitor import monitor
 from timeout_session import new_session
 
-__version__ = '0.1.0'
+__version__ = '0.1.1'
 
 # L'unique destination du plugin. Vide : rien n'est envoyé.
 SERVER_URL = 'https://squadron-tracker-api.cronisos.workers.dev'
@@ -128,7 +128,7 @@ def plugin_prefs(parent: nb.Notebook, cmdr: str, is_beta: bool) -> Optional[tk.F
     frame = nb.Frame(parent)
     token_var = tk.StringVar(value=config.get_str(TOKEN_KEY, default=''))
     nb.Label(frame, text='Jeton du squadron').grid(row=0, column=0, padx=10, pady=4, sticky=tk.W)
-    nb.Entry(frame, textvariable=token_var, show='*', width=46).grid(row=0, column=1, padx=10, pady=4)
+    nb.EntryMenu(frame, textvariable=token_var, show='*', width=46).grid(row=0, column=1, padx=10, pady=4)
     nb.Label(frame, text=f'Destination : {SERVER_URL or "aucune"}').grid(
         row=1, column=0, columnspan=2, padx=10, sticky=tk.W
     )

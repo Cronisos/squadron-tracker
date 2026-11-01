@@ -23,7 +23,8 @@ def install_stubs():
     requests = types.ModuleType('requests')
     requests.RequestException = type('RequestException', (Exception,), {})
     notebook = types.ModuleType('myNotebook')
-    notebook.Notebook = notebook.Frame = notebook.Label = notebook.Entry = mock.Mock()
+    # Uniquement les noms qui existent vraiment dans myNotebook (EDMC 6.1)
+    notebook.Notebook = notebook.Frame = notebook.Label = notebook.EntryMenu = mock.Mock()
     sys.modules.update({
         'config': config, 'monitor': monitor, 'timeout_session': session,
         'requests': requests, 'myNotebook': notebook, 'tkinter': mock.Mock(),
@@ -91,6 +92,11 @@ class Journal(Base):
         self.assertIsNone(self.load.thread)
         self.load.journal_entry('C', False, 'X', '', self.entry, {})
         self.assertEqual(self.queued(), 0)
+
+
+class Prefs(Base):
+    def test_la_page_de_reglages_se_construit(self):
+        self.assertIsNotNone(self.load.plugin_prefs(mock.Mock(), 'C', False))
 
 
 class Deliver(Base):
