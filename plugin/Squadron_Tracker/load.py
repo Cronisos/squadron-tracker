@@ -21,7 +21,7 @@ from timeout_session import new_session
 __version__ = '0.1.0'
 
 # L'unique destination du plugin. Vide : rien n'est envoyé.
-SERVER_URL = ''
+SERVER_URL = 'https://squadron-tracker-api.cronisos.workers.dev'
 
 TOKEN_KEY = 'squadron_tracker_token'
 MAX_QUEUED = 200

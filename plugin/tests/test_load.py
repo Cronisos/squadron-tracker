@@ -86,6 +86,7 @@ class Journal(Base):
         self.assertEqual(self.queued(), 0)
 
     def test_sans_serveur_le_plugin_reste_inactif(self):
+        self.load.SERVER_URL = ''
         self.load.plugin_start3('dossier')
         self.assertIsNone(self.load.thread)
         self.load.journal_entry('C', False, 'X', '', self.entry, {})
