@@ -185,6 +185,62 @@ export function cardSvg(model, { board = [], boardTitle = 'CLASSEMENT', theme = 
     ${currentPanel(model, c)}${routePanel(model, c)}${boardPanel(board, boardTitle, c)}</svg>`;
 }
 
+function stepPosition(model, index) {
+  return Math.min(index, model.steps.length - 1) / (model.steps.length - 1);
+}
+
+function validatedPanel(model, from, c) {
+  const x = 36;
+  const y = 408;
+  const validated = model.steps.slice(from.index, model.index);
+  const shown = validated.slice(0, 4);
+  const lines = shown.map((step, k) => {
+    const ly = y + 72 + k * 38;
+    return `<polygon points="${hexagon(x + 34, ly - 7, 10)}" fill="url(#done)"/>
+      <text x="${x + 56}" y="${ly}" ${LABEL} font-size="24" fill="#fff">${escapeXml(step.name)}</text>
+      <text x="${x + 398}" y="${ly}" text-anchor="end" ${LABEL} font-size="20" fill="${c.b}">${escapeXml(step.goal)}</text>`;
+  }).join('');
+  const more = validated.length > 4 ? `<text x="${x + 22}" y="${y + 216}" ${LABEL} font-size="19" fill="#a8a2b2">et ${validated.length - 4} de plus</text>` : '';
+  const empty = validated.length ? '' : `<text x="${x + 22}" y="${y + 92}" ${LABEL} font-size="24" fill="#c8c3d0">Aucun cette semaine</text>
+    <text x="${x + 22}" y="${y + 126}" ${LABEL} font-size="21" fill="#a8a2b2">${model.current ? `Toujours sur ${escapeXml(model.current.name)}` : ''}</text>`;
+  return `${panel(x, y, 420, 232, c, `SYSTÈMES VALIDÉS : ${validated.length}`)}${lines}${more}${empty}`;
+}
+
+function summaryPanel(model, from, squadronTotal, c) {
+  const x = 476;
+  const y = 408;
+  const w = 330;
+  const gain = Math.max(0, model.done - from.done);
+  const pct = Math.floor((model.done / model.total) * 100);
+  const row = (k, label, value) => `<text x="${x + 22}" y="${y + 66 + k * 36}" ${LABEL} font-size="21" fill="#c8c3d0">${label}</text>
+    <text x="${x + w - 22}" y="${y + 66 + k * 36}" text-anchor="end" ${LABEL_BOLD} font-size="23" fill="#fff">${value}</text>`;
+  const next = model.current ? `Objectif : ${model.current.name}` : 'Route terminée';
+  return `${panel(x, y, w, 232, c, 'BILAN DE LA SEMAINE')}
+    ${row(0, 'Avancée de la route', `+${merits(gain)}`)}
+    ${row(1, 'Mérites du classement', merits(squadronTotal))}
+    ${row(2, 'Route complète', `${pct} %`)}
+    ${row(3, 'Cumul', `${merits(model.done)} / ${merits(model.total)}`)}
+    <text x="${x + 22}" y="${y + 212}" ${LABEL} font-size="20" fill="${c.b}">${escapeXml(next)}</text>`;
+}
+
+/** Rapport figé de la semaine écoulée. */
+export function reportSvg(model, { from, label, board = [], total = 0, theme = 'orange', boardTitle = 'TOP DE LA SEMAINE' }) {
+  const c = THEMES[theme];
+  const start = stepPosition(model, from.index);
+  const end = shipPosition(model);
+  const [mx, my] = curve(start);
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" width="${WIDTH}" height="${HEIGHT}">${background(c, HEIGHT)}
+    <text x="38" y="62" ${HUD} font-size="38" fill="#fff" letter-spacing="1">RAPPORT DE LA SEMAINE</text>
+    <text x="40" y="92" ${LABEL} font-size="20" letter-spacing="2" fill="${c.b}">${escapeXml(`${label} · ${model.title}`.toUpperCase())}</text>
+    <polyline points="${trail(0, 1)}" fill="none" stroke="#fff" stroke-opacity=".28" stroke-width="2" stroke-dasharray="3 9" stroke-linecap="round"/>
+    ${end > 0 ? `<polyline points="${trail(0, end)}" fill="none" stroke="${c.a}" stroke-width="4" stroke-opacity=".45"/>` : ''}
+    ${end > start ? `<polyline points="${trail(start, end)}" fill="none" stroke="${c.b}" stroke-width="6" filter="url(#glow)"/>` : ''}
+    ${model.steps.map((step, k) => node(step, k, model, c)).join('')}
+    <path d="M${mx.toFixed(1)} ${(my - 20).toFixed(1)} l-7 -12 h14 Z" fill="${c.b}"/>
+    ${ship(end, 0, c)}
+    ${validatedPanel(model, from, c)}${summaryPanel(model, from, total, c)}${boardPanel(board, boardTitle, c)}</svg>`;
+}
+
 /** La bannière publiée quand un système est validé. */
 export function bannerSvg(step, next, { theme = 'orange' } = {}) {
   const c = THEMES[theme];

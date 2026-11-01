@@ -93,12 +93,22 @@ async function postMerits(request, env, now) {
 
 async function getLeaderboard(url, env) {
   const since = url.searchParams.get('since') || '1970-01-01T00:00:00Z';
-  if (!TIMESTAMP.test(since)) return fail(400);
+  const until = url.searchParams.get('until') || '9999-12-31T23:59:59Z';
+  if (!TIMESTAMP.test(since) || !TIMESTAMP.test(until)) return fail(400);
   const { results } = await env.DB.prepare(
-    `SELECT cmdr, SUM(merits) AS merits FROM merits WHERE at >= ?
+    `SELECT cmdr, SUM(merits) AS merits FROM merits WHERE at >= ? AND at < ?
      GROUP BY cmdr ORDER BY merits DESC, cmdr ASC LIMIT 10`
-  ).bind(since).all();
-  return reply(200, { leaderboard: results });
+  ).bind(since, until).all();
+  const sum = await env.DB.prepare('SELECT COALESCE(SUM(merits), 0) AS total FROM merits WHERE at >= ? AND at < ?')
+    .bind(since, until)
+    .first();
+  return reply(200, { leaderboard: results, total: sum.total });
+}
+
+function validReport(report) {
+  if (report === undefined) return true;
+  return /^\d{4}-\d{2}-\d{2}$/.test(report?.week) && TIMESTAMP.test(report.at)
+    && Number.isInteger(report.index) && Number.isFinite(report.done);
 }
 
 async function getState(env) {
@@ -110,8 +120,10 @@ async function putState(request, env) {
   const { body, tooLarge } = await readJson(request, MAX_STATE);
   if (tooLarge) return fail(413);
   const validId = body?.messageId === undefined || /^\d{1,32}$/.test(body.messageId);
-  if (!body || !validId || !Number.isInteger(body.index)) return fail(400);
-  const value = JSON.stringify({ messageId: body.messageId, index: body.index });
+  if (!body || !validId || !Number.isInteger(body.index) || !validReport(body.report)) return fail(400);
+  const { week, at, index, done } = body.report ?? {};
+  const report = body.report ? { week, at, index, done } : undefined;
+  const value = JSON.stringify({ messageId: body.messageId, index: body.index, report });
   await env.DB.prepare(
     "INSERT INTO state (key, value) VALUES ('tracker', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value"
   ).bind(value).run();

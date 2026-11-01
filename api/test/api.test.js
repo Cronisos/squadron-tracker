@@ -133,6 +133,24 @@ test('le classement respecte la date de départ', async () => {
   assert.deepEqual((await res.json()).leaderboard, []);
 });
 
+test('le classement d\'une semaine exclut ce qui suit sa fin et donne le total', async () => {
+  const token = await member();
+  await send(token, { at: '2026-11-01T10:00:00Z', merits: 100 });
+  await send(token, { at: '2026-11-01T11:30:00Z', merits: 50 });
+  const res = await call('/v1/leaderboard?since=2026-11-01T09:00:00Z&until=2026-11-01T11:00:00Z', { token: 'tracker' });
+  assert.deepEqual(await res.json(), { leaderboard: [{ cmdr: 'Alpha', merits: 100 }], total: 100 });
+});
+
+test('le relevé du rapport hebdomadaire est gardé et validé', async () => {
+  const put = (report) => call('/v1/state', { method: 'PUT', token: 'tracker', body: { messageId: '1', index: 2, report } });
+  const report = { week: '2026-10-29', at: '2026-10-29T09:00:00Z', index: 2, done: 1500 };
+  assert.equal((await put({ ...report, week: 'jeudi' })).status, 400);
+  assert.equal((await put({ ...report, done: 'x' })).status, 400);
+  assert.equal((await put({ ...report, extra: 'non' })).status, 200);
+  const res = await call('/v1/state', { token: 'tracker' });
+  assert.deepEqual((await res.json()).report, report);
+});
+
 test('l\'état du suivi est gardé et validé', async () => {
   const put = (body) => call('/v1/state', { method: 'PUT', token: 'tracker', body });
   assert.equal((await put({ messageId: 'abc', index: 1 })).status, 400);

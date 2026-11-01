@@ -7,7 +7,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { animatedCard } from './animation.js';
-import { bannerSvg, cardSvg } from './card.js';
+import { bannerSvg, cardSvg, reportSvg } from './card.js';
 import { postImage } from './discord.js';
 import { GOALS, summarize } from './progress.js';
 import { pngFrom } from './render.js';
@@ -44,6 +44,9 @@ const banner = pngFrom(bannerSvg(validated, model.current, { theme: THEME }));
 writeFileSync(new URL('route.gif', OUT), gif);
 writeFileSync(new URL('route.png', OUT), png);
 writeFileSync(new URL('valide.png', OUT), banner);
+const from = { index: Math.max(0, model.index - 2), done: model.done * 0.75 };
+const report = pngFrom(reportSvg(model, { from, label: 'Du 29 octobre au 5 novembre', board, total: Math.round(model.done * 0.25), theme: THEME, boardTitle: 'TOP DE LA SEMAINE (EXEMPLE)' }));
+writeFileSync(new URL('rapport.png', OUT), report);
 console.log(`GIF : ${(gif.length / 1e6).toFixed(2)} Mo en ${seconds} s · PNG : ${(png.length / 1e6).toFixed(2)} Mo`);
 
 if (process.env.DISCORD_WEBHOOK_URL) {

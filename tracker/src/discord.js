@@ -18,6 +18,12 @@ export async function postImage(webhook, file, filename, type, fetcher = fetch) 
   return (await response.json()).id;
 }
 
+/** Un message déjà supprimé à la main n'est pas une erreur. */
+export async function deleteMessage(webhook, messageId, fetcher = fetch) {
+  const response = await fetcher(`${webhook}/messages/${messageId}`, { method: 'DELETE' });
+  if (!response.ok && response.status !== 404) throw new Error(`Suppression Discord refusée : ${response.status}`);
+}
+
 /** Remplace l'image du message existant. Renvoie false s'il a été supprimé. */
 export async function editImage(webhook, messageId, file, filename, type, fetcher = fetch) {
   const response = await fetcher(`${webhook}/messages/${messageId}`, { method: 'PATCH', body: form(file, filename, type) });

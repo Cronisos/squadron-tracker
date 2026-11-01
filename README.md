@@ -1,6 +1,6 @@
 # Squadron Tracker
 
-Suivi Powerplay d'une route de squadron dans un salon Discord : une carte animée où un vaisseau avance de système en système, avec la progression de l'objectif, l'avancement global et un classement des membres.
+Suivi Powerplay d'une route de squadron dans un salon Discord : une carte animée où un vaisseau avance de système en système, avec la progression de l'objectif, l'avancement global et un classement des membres. Chaque jeudi, un rapport figé résume la semaine.
 
 État actuel : l'API et le suivi tournent. Le plugin reste à essayer avec le vrai EDMC avant d'être distribué.
 
@@ -14,6 +14,12 @@ Suivi Powerplay d'une route de squadron dans un salon Discord : une carte animé
 | [config/](config/) | Exemple de route. La vraie route reste privée | Secret GitHub |
 
 La progression des systèmes vient des données publiques de [Spansh](https://spansh.co.uk). Les mérites individuels viennent uniquement du plugin. Le plugin ne parle qu'à l'API, et ne connaît ni Discord ni Spansh.
+
+## Salon Discord
+
+Réserve le salon au bot, en lecture seule pour les joueurs. La carte est modifiée sur place à chaque mise à jour. Quand une bannière ou un rapport est publié, elle est republiée dessous pour rester le dernier message.
+
+Le rapport part le jeudi après 9 h UTC. Le premier passage enregistre seulement un relevé de départ : le premier rapport arrive le jeudi suivant.
 
 ## Sécurité
 
