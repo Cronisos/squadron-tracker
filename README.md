@@ -2,7 +2,7 @@
 
 Suivi Powerplay d'une route de squadron dans un salon Discord : une carte animée où un vaisseau avance de système en système, avec la progression de l'objectif, l'avancement global et un classement des membres.
 
-État actuel : le code et les tests fonctionnent en local. L'API, GitHub Actions et le plugin n'ont pas encore tourné en conditions réelles.
+État actuel : l'API et le suivi tournent. Le plugin reste à essayer avec le vrai EDMC avant d'être distribué.
 
 ## Les parties du projet
 
@@ -53,7 +53,6 @@ Tests du plugin, avec Python 3.9 ou plus : `python plugin/tests/test_load.py`.
 
 ## Déploiement
 
-Le déploiement n'a pas encore été essayé : ces étapes sont à valider au premier lancement.
 
 **API**
 
@@ -81,7 +80,7 @@ Dans le dépôt GitHub, va dans Settings, Secrets and variables, Actions, et ajo
 
 **Plugin**
 
-Indique l'adresse de l'API dans `SERVER_URL` de `load.py`, puis publie une version avec l'empreinte de son archive.
+Vérifie l'adresse de l'API dans `SERVER_URL` de `load.py`, puis publie une version avec l'empreinte de son archive.
 
 **Membres**
 
