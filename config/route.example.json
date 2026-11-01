@@ -1,0 +1,14 @@
+{
+  "title": "ROUTE EXEMPLE",
+  "subtitle": "DE SOL À ALPHA CENTAURI",
+  "power": "Aisling Duval",
+  "meritsPerPoint": 4,
+  "since": "2026-11-01T00:00:00Z",
+  "theme": "orange",
+  "stops": [
+    { "name": "Sol", "goal": "Consolidé", "merits": 1880000 },
+    { "name": "Barnard's Star", "goal": "Consolidé", "merits": 1880000 },
+    { "name": "Wolf 359", "goal": "Forteresse", "merits": 4480000, "noLarge": true },
+    { "name": "Alpha Centauri", "goal": "Prise", "merits": 480000 }
+  ]
+}

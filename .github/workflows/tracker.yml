@@ -1,0 +1,32 @@
+name: Mise à jour du suivi
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tracker
+
+jobs:
+  update:
+    if: vars.TRACKER_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - run: npm run update
+        env:
+          ROUTE_JSON: ${{ secrets.ROUTE_JSON }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          API_URL: ${{ secrets.API_URL }}
+          TRACKER_TOKEN: ${{ secrets.TRACKER_TOKEN }}

@@ -1,0 +1,8 @@
+name = "squadron-tracker-api"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "squadron-tracker"
+database_id = "A_REMPLIR_AU_DEPLOIEMENT"

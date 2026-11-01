@@ -1,0 +1,7 @@
+node_modules/
+out/
+.wrangler/
+.env
+.env.*
+config/route.local.json
+__pycache__/

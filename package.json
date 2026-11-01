@@ -1,0 +1,17 @@
+{
+  "name": "squadron-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "test": "node --test \"api/test/*.test.js\" \"tracker/test/*.test.js\"",
+    "demo": "node tracker/src/demo.js",
+    "update": "node tracker/src/run.js"
+  },
+  "dependencies": {
+    "@resvg/resvg-js": "2.6.2",
+    "gifenc": "1.0.3"
+  }
+}
