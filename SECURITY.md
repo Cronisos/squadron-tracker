@@ -6,20 +6,21 @@ Le plugin s'exécute sur le PC des joueurs, avec les mêmes droits qu'EDMC. Il d
 
 - Il ne réagit qu'à l'événement `PowerplayMerits` du jeu, en galaxie Live.
 - Il envoie seulement quatre champs : nom du commandant, système, mérites gagnés et heure. Voir `build_payload` dans `plugin/Squadron_Tracker/load.py`.
-- Il ne parle qu'à une seule adresse HTTPS, écrite en clair dans `SERVER_URL`, affichée dans ses réglages.
+- Il ne parle qu'à une seule adresse HTTPS : le serveur de l'escadron choisi dans ses réglages (par défaut `SERVER_URL`), affiché en clair. Un nom public seulement : ni adresse IP, ni port, ni chemin. Changer de serveur efface le jeton, qui n'a été donné que par l'ancien.
 - Il ne suit pas les redirections, pour que le jeton ne parte jamais ailleurs.
 
 ## Ce qu'il ne fait pas
 
 - Pas de mise à jour automatique : chaque version est installée à la main.
 - Pas d'exécutable : uniquement un fichier Python lisible, sans dépendance ajoutée.
-- Pas d'identifiant Frontier, pas de mot de passe.
+- Pas d'identifiant Frontier. Le mot de passe de l'escadron ne sert qu'à l'inscription : il part une fois vers le serveur de l'escadron, avec le nom du commandant, et n'est jamais gardé.
 - Aucune lecture de fichier ni écriture sur le disque en dehors du jeton, conservé dans les réglages d'EDMC.
 - Le journal complet n'est jamais envoyé.
 
 ## Côté serveur
 
 - Chaque membre a son propre jeton, aléatoire et révocable. Seule son empreinte SHA-256 est stockée.
+- L'inscription demande le mot de passe de l'escadron, comparé à durée constante. Dix essais par minute et par adresse au plus. Un nom déjà inscrit est refusé : le mot de passe ne permet pas de prendre la place d'un membre. Sans mot de passe configuré, les inscriptions sont fermées.
 - Un jeton est lié à un commandant et ne peut pas créditer quelqu'un d'autre.
 - Les valeurs sont vérifiées et plafonnées, et le nombre de requêtes est limité.
 - Les seules données conservées sont le nom du commandant, le système, les mérites et l'heure. Retirer un membre les efface.
@@ -33,6 +34,7 @@ Le plugin s'exécute sur le PC des joueurs, avec les mêmes droits qu'EDMC. Il d
 - Aucune sécurité n'est totale. Une fois installé, tout plugin EDMC peut techniquement lire les fichiers de l'utilisateur, d'où l'importance de relire `load.py` et de vérifier l'empreinte à chaque version.
 - Le classement repose sur la confiance : un membre peut modifier son plugin pour envoyer de faux chiffres. La barre du système, issue de Spansh, sert de contrôle global, pas individuel.
 - Un jeton qui fuite permet d'envoyer de faux mérites pour ce commandant, jusqu'à sa révocation.
+- Un mot de passe qui fuite permet d'inscrire des noms inconnus. Change-le, puis retire les intrus avec `members.mjs`.
 - Cloudflare, GitHub et Spansh sont des services tiers. Spansh n'offre aucune garantie de stabilité sur les adresses utilisées.
 
 ## Signaler un problème

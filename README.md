@@ -32,7 +32,13 @@ Le fonctionnement et les limites sont décrits dans [SECURITY.md](SECURITY.md).
 3. Vérifie son empreinte dans PowerShell : `Get-FileHash Squadron_Tracker.zip -Algorithm SHA256`. Elle doit correspondre à celle de la version publiée.
 4. Lis `load.py` : il est court, et c'est le seul code qui tourne sur ton PC.
 5. Copie le dossier `Squadron_Tracker` dans `%LOCALAPPDATA%\EDMarketConnector\plugins`.
-6. Relance EDMC, puis colle ton jeton dans Fichier, Paramètres, Squadron Tracker.
+6. Relance EDMC et lance le jeu une fois, pour qu'EDMC connaisse ton commandant.
+7. Dans Fichier, Paramètres, Squadron Tracker : colle l'adresse du serveur de l'escadron et le mot de passe donnés
+   par le chef, puis clique « Rejoindre en tant que … ». Le plugin reçoit ton jeton et le garde ; le mot de passe,
+   lui, n'est pas gardé. Si le chef t'a donné un jeton à la place, colle-le dans « Jeton du squadron ».
+
+Elite Compagnon fait la même chose dans sa page Escadron. Les deux peuvent tourner ensemble : un même gain ne compte
+qu'une fois.
 
 Dans les réglages d'EDMC, active aussi l'envoi vers EDDN pour garder la progression à jour sur Spansh. Ces données partent alors de ton EDMC, sans passer par ce projet.
 
@@ -68,10 +74,11 @@ npx wrangler d1 create squadron-tracker
 npx wrangler d1 execute squadron-tracker --remote --file=schema.sql
 npx wrangler secret put ADMIN_TOKEN
 npx wrangler secret put TRACKER_TOKEN
+npx wrangler secret put JOIN_PASSWORD
 npx wrangler deploy
 ```
 
-Reporte l'identifiant de la base dans `wrangler.toml` avant de déployer. Pour les deux secrets, génère de longues valeurs aléatoires.
+Reporte l'identifiant de la base dans `wrangler.toml` avant de déployer. Pour `ADMIN_TOKEN` et `TRACKER_TOKEN`, génère de longues valeurs aléatoires. `JOIN_PASSWORD` est le mot de passe de l'escadron, que tu donnes aux membres : sans lui, les inscriptions sont fermées et seul `members.mjs add` crée des membres. Pour en changer, relance `npx wrangler secret put JOIN_PASSWORD` : les membres déjà inscrits gardent leur jeton.
 
 **Suivi**
 
@@ -86,16 +93,21 @@ Dans le dépôt GitHub, va dans Settings, Secrets and variables, Actions, et ajo
 
 **Plugin**
 
-Vérifie l'adresse de l'API dans `SERVER_URL` de `load.py`, puis publie une version avec l'empreinte de son archive.
+`SERVER_URL` de `load.py` est seulement le serveur proposé par défaut : chaque membre peut coller celui de son escadron dans les réglages du plugin. Publie une version avec l'empreinte de son archive.
 
 **Membres**
 
+Avec le mot de passe, chaque membre s'inscrit seul, depuis le plugin ou Elite Compagnon. Un nom déjà inscrit est
+refusé : le mot de passe ne permet pas de prendre la place de quelqu'un. Pour le reste :
+
 ```
+API_URL=... ADMIN_TOKEN=... node api/scripts/members.mjs list
 API_URL=... ADMIN_TOKEN=... node api/scripts/members.mjs add "Nom CMDR"
 API_URL=... ADMIN_TOKEN=... node api/scripts/members.mjs remove "Nom CMDR"
 ```
 
-Retirer un membre coupe son jeton et efface ses mérites.
+`list` montre les inscrits. `add` crée un membre ou lui donne un nouveau jeton (PC réinstallé, jeton perdu) : il
+garde ses mérites. Retirer un membre coupe son jeton et efface ses mérites.
 
 ## Format de la route
 

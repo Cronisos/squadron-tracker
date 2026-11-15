@@ -175,3 +175,58 @@ test('validMerits retire les champs non prévus', () => {
   const entry = validMerits({ cmdr: 'A', system: 'S', merits: 1, at: AT, extra: 'non' }, NOW);
   assert.deepEqual(Object.keys(entry), ['cmdr', 'system', 'merits', 'at']);
 });
+
+// --- Inscription avec le mot de passe de l'escadron ---
+const join = (body, ip = '203.0.113.1') =>
+  handle(
+    new Request('https://api.test/v1/join', {
+      method: 'POST',
+      headers: { 'cf-connecting-ip': ip },
+      body: typeof body === 'string' ? body : JSON.stringify(body),
+    }),
+    env,
+    NOW
+  );
+
+test('avec le bon mot de passe, un commandant s\'inscrit et reçoit un jeton qui marche', async () => {
+  env.JOIN_PASSWORD = 'mot de passe du chef';
+  const res = await join({ cmdr: 'Alpha', password: 'mot de passe du chef' });
+  assert.equal(res.status, 200);
+  const { cmdr, token } = await res.json();
+  assert.equal(cmdr, 'Alpha');
+  assert.match(token, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal((await send(token)).status, 200);
+  assert.deepEqual(await board(), [{ cmdr: 'Alpha', merits: 100 }]);
+});
+
+test('mauvais mot de passe, ou inscriptions fermées : refus', async () => {
+  assert.equal((await join({ cmdr: 'Alpha', password: 'x' })).status, 404);
+  env.JOIN_PASSWORD = 'bon';
+  assert.equal((await join({ cmdr: 'Alpha', password: 'mauvais' })).status, 401);
+  assert.equal((await join({ cmdr: 'Alpha' })).status, 400);
+  assert.equal((await join({ cmdr: '', password: 'bon' })).status, 400);
+  assert.equal((await join('pas du json')).status, 400);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM members').first().then((r) => r.n), 0);
+});
+
+test('le mot de passe ne permet pas de prendre la place d\'un membre déjà inscrit', async () => {
+  env.JOIN_PASSWORD = 'bon';
+  const first = (await (await join({ cmdr: 'Alpha', password: 'bon' })).json()).token;
+  assert.equal((await join({ cmdr: 'alpha', password: 'bon' })).status, 409);
+  assert.equal((await send(first)).status, 200); // l'ancien jeton marche toujours
+});
+
+test('les essais de mot de passe sont limités par adresse', async () => {
+  env.JOIN_PASSWORD = 'bon';
+  for (let i = 0; i < 10; i++) assert.equal((await join({ cmdr: 'A', password: `faux${i}` })).status, 401);
+  assert.equal((await join({ cmdr: 'A', password: 'bon' })).status, 429);
+  assert.equal((await join({ cmdr: 'A', password: 'bon' }, '203.0.113.2')).status, 200);
+});
+
+test('le chef liste les membres inscrits', async () => {
+  await member('Bravo');
+  await member('Alpha');
+  assert.equal((await call('/admin/members', { token: 'faux' })).status, 401);
+  const res = await call('/admin/members', { token: 'admin' });
+  assert.deepEqual((await res.json()).members.map((m) => m.cmdr), ['Alpha', 'Bravo']);
+});

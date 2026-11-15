@@ -4,6 +4,7 @@ const MAX_BODY = 1024;
 const MAX_STATE = 4096;
 const MAX_MERITS = 1_000_000; // un seul gain de mérites, largement au-dessus des ventes observées
 const MAX_PER_MINUTE = 120;
+const MAX_JOINS_PER_MINUTE = 10; // essais de mot de passe par adresse et par minute
 const MAX_AGE_MS = 30 * 24 * 3600 * 1000;
 const MAX_AHEAD_MS = 5 * 60 * 1000;
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
@@ -63,14 +64,14 @@ export function validMerits(body, now) {
   return { cmdr, system, merits, at };
 }
 
-async function underRateLimit(env, tokenHash, now) {
+async function underRateLimit(env, tokenHash, now, max = MAX_PER_MINUTE) {
   const minute = Math.floor(now / 60000);
   await env.DB.prepare('DELETE FROM rate WHERE minute < ?').bind(minute - 1).run();
   const row = await env.DB.prepare(
     `INSERT INTO rate (token_hash, minute, count) VALUES (?, ?, 1)
      ON CONFLICT (token_hash, minute) DO UPDATE SET count = count + 1 RETURNING count`
   ).bind(tokenHash, minute).first();
-  return row.count <= MAX_PER_MINUTE;
+  return row.count <= max;
 }
 
 async function postMerits(request, env, now) {
@@ -143,6 +144,32 @@ async function addMember(request, env) {
   return reply(200, { cmdr: body.cmdr, token });
 }
 
+/**
+ * Inscription d'un membre avec le mot de passe de l'escadron (secret JOIN_PASSWORD) : renvoie son jeton.
+ * Sans mot de passe configuré, les inscriptions sont fermées (404). Un nom déjà inscrit est refusé (409) : le
+ * mot de passe ne permet pas de prendre la place d'un membre. Pour un nouveau jeton, le chef passe par /admin.
+ */
+async function joinSquadron(request, env, now) {
+  if (!env.JOIN_PASSWORD) return fail(404);
+  const ip = request.headers.get('cf-connecting-ip') || 'inconnue';
+  if (!(await underRateLimit(env, await sha256(`join|${ip}`), now, MAX_JOINS_PER_MINUTE))) return fail(429);
+  const { body, tooLarge } = await readJson(request, MAX_BODY);
+  if (tooLarge) return fail(413);
+  if (!isName(body?.cmdr, 64) || typeof body?.password !== 'string') return fail(400);
+  if (!(await sameSecret(body.password, env.JOIN_PASSWORD))) return fail(401);
+  const token = newToken();
+  const row = await env.DB.prepare(
+    'INSERT INTO members (cmdr, token_hash, created_at) VALUES (?, ?, ?) ON CONFLICT (cmdr) DO NOTHING RETURNING cmdr'
+  ).bind(body.cmdr, await sha256(token), new Date(now).toISOString()).first();
+  if (!row) return fail(409);
+  return reply(200, { cmdr: row.cmdr, token });
+}
+
+async function listMembers(env) {
+  const { results } = await env.DB.prepare('SELECT cmdr, created_at FROM members ORDER BY cmdr').all();
+  return reply(200, { members: results });
+}
+
 async function removeMember(cmdr, env) {
   await env.DB.batch([
     env.DB.prepare('DELETE FROM members WHERE cmdr = ?').bind(cmdr),
@@ -157,6 +184,7 @@ export async function handle(request, env, now = Date.now()) {
     const { method } = request;
     const path = url.pathname;
     if (path === '/v1/merits' && method === 'POST') return await postMerits(request, env, now);
+    if (path === '/v1/join' && method === 'POST') return await joinSquadron(request, env, now);
     if (path === '/v1/leaderboard' || path === '/v1/state') {
       if (!(await sameSecret(bearer(request), env.TRACKER_TOKEN))) return fail(401);
       if (path === '/v1/leaderboard' && method === 'GET') return await getLeaderboard(url, env);
@@ -167,6 +195,7 @@ export async function handle(request, env, now = Date.now()) {
     if (path === '/admin/members' || path.startsWith('/admin/members/')) {
       if (!(await sameSecret(bearer(request), env.ADMIN_TOKEN))) return fail(401);
       if (path === '/admin/members' && method === 'POST') return await addMember(request, env);
+      if (path === '/admin/members' && method === 'GET') return await listMembers(env);
       if (method === 'DELETE') return await removeMember(decodeURIComponent(path.slice(15)), env);
       return fail(405);
     }
