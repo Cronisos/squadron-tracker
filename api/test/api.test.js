@@ -239,13 +239,38 @@ test('le même nom rejoint plusieurs fois (app, plugin, PC réinstallé) : chaqu
   assert.deepEqual(list.members.map((m) => [m.cmdr, m.installations]), [['Alpha', 2]]);
 });
 
-test('au plus 10 installations par commandant : les plus anciennes sautent', async () => {
+test('au plus 10 installations par commandant : la 11e est refusée, personne ne purge les jetons d\'un membre', async () => {
   env.JOIN_PASSWORD = 'bon';
   const tokens = [];
-  for (let i = 0; i < 12; i++) tokens.push((await (await join({ cmdr: 'Alpha', password: 'bon' }, `203.0.113.${i + 20}`)).json()).token);
-  const n = await env.DB.prepare('SELECT COUNT(*) AS n FROM tokens').first();
-  assert.equal(n.n, 10);
-  assert.equal((await send(tokens[11])).status, 200);
+  for (let i = 0; i < 10; i++) tokens.push((await (await join({ cmdr: 'Alpha', password: 'bon' }, `203.0.113.${i + 20}`)).json()).token);
+  assert.equal((await join({ cmdr: 'Alpha', password: 'bon' }, '203.0.113.99')).status, 429);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM tokens').first()).n, 10);
+  assert.equal((await send(tokens[0])).status, 200, 'le premier jeton marche toujours');
+  // Le chef coupe les installations : les mérites restent, on peut rejoindre de nouveau
+  assert.equal((await call('/admin/members/Alpha/tokens', { method: 'DELETE', token: 'admin' })).status, 200);
+  assert.equal((await send(tokens[0], { at: '2026-11-01T11:40:00Z' })).status, 401);
+  assert.deepEqual(await board(), [{ cmdr: 'Alpha', merits: 100 }]);
+  assert.equal((await join({ cmdr: 'Alpha', password: 'bon' }, '203.0.113.98')).status, 200);
+});
+
+test('noms filtrés à l\'inscription : ni @, ni retour à la ligne, ni caractère de contrôle', async () => {
+  env.JOIN_PASSWORD = 'bon';
+  for (const bad of ['@everyone', 'Alpha\nBravo', '\u202eAlpha', ' Alpha', 'a'.repeat(41), '']) {
+    assert.equal((await join({ cmdr: bad, password: 'bon' }, '203.0.113.50')).status, 400, JSON.stringify(bad));
+  }
+  for (const ok of ['Alpha', 'Jean-Luc Picard', "O'Neil", 'CMDR_42', 'Élodie.B']) {
+    assert.equal((await join({ cmdr: ok, password: 'bon' }, '203.0.113.51')).status, 200, ok);
+  }
+});
+
+test('le chef ferme et rouvre les inscriptions', async () => {
+  env.JOIN_PASSWORD = 'bon';
+  assert.deepEqual(await (await call('/admin/join', { token: 'admin' })).json(), { open: true });
+  assert.equal((await call('/admin/join', { method: 'PUT', token: 'tracker', body: { open: false } })).status, 401);
+  assert.equal((await call('/admin/join', { method: 'PUT', token: 'admin', body: { open: false } })).status, 200);
+  assert.equal((await join({ cmdr: 'Alpha', password: 'bon' })).status, 403);
+  await call('/admin/join', { method: 'PUT', token: 'admin', body: { open: true } });
+  assert.equal((await join({ cmdr: 'Alpha', password: 'bon' }, '203.0.113.3')).status, 200);
 });
 
 test('retirer un membre coupe tous ses jetons', async () => {

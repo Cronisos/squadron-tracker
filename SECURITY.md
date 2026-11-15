@@ -21,7 +21,8 @@ Le plugin s'exécute sur le PC des joueurs, avec les mêmes droits qu'EDMC. Il d
 
 - Chaque membre a son propre jeton, aléatoire et révocable. Seule son empreinte SHA-256 est stockée.
 - L'inscription demande le code de l'escadron (son mot de passe, comparé à durée constante), le même pour tous. Dix essais par minute et par adresse au plus. Sans mot de passe configuré, les inscriptions sont fermées.
-- Un nom peut rejoindre plusieurs fois (app et plugin, PC réinstallé) : chaque installation a son jeton, au plus 10 par commandant.
+- Un nom peut rejoindre plusieurs fois (app et plugin, PC réinstallé) : chaque installation a son jeton, au plus 10 par commandant. Au-delà, l'inscription est refusée : on ne peut pas chasser les jetons d'un membre en s'inscrivant à sa place. Le chef coupe les installations d'un membre (ses mérites restent) et peut fermer les inscriptions.
+- Les noms inscrits par le code sont filtrés : lettres, chiffres, espace et . _ ' - seulement (ni @, ni retour à la ligne, ni caractère de contrôle).
 - La route se lit avec la clé du suivi, la clé de chef ou un jeton de membre, et ne se modifie qu'avec la clé de chef.
 - Un jeton est lié à un commandant et ne peut pas créditer quelqu'un d'autre.
 - Les valeurs sont vérifiées et plafonnées, et le nombre de requêtes est limité.

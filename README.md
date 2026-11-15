@@ -105,7 +105,7 @@ Dans le dépôt GitHub, va dans Settings, Secrets and variables, Actions, et ajo
 **Membres**
 
 Avec le code de l'escadron, chaque membre s'inscrit seul, depuis le plugin ou Elite Compagnon, autant de fois qu'il
-le faut (au plus 10 installations gardées par commandant). Pour le reste :
+le faut (au plus 10 installations par commandant ; au-delà, refus). Le chef peut fermer les inscriptions (`PUT /admin/join {open}`) et couper les installations d'un membre sans toucher à ses mérites (`DELETE /admin/members/<nom>/tokens`), depuis la page du chef d'Elite Compagnon. Pour le reste :
 
 ```
 API_URL=... ADMIN_TOKEN=... node api/scripts/members.mjs list

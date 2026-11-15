@@ -5,7 +5,9 @@ const MAX_STATE = 4096;
 const MAX_MERITS = 1_000_000; // un seul gain de mérites, largement au-dessus des ventes observées
 const MAX_PER_MINUTE = 120;
 const MAX_JOINS_PER_MINUTE = 10; // essais de mot de passe par adresse et par minute
-const MAX_TOKENS_PER_CMDR = 10; // installations gardées par commandant (les plus anciennes sautent)
+const MAX_TOKENS_PER_CMDR = 10; // installations par commandant ; au-delà, refus (jamais d'éviction : personne ne purge un membre)
+// Nom de commandant inscrit par le code : lettres, chiffres, espace et . _ ' - (ni @, ni retour à la ligne, ni contrôle)
+const CMDR_NAME = /^[\p{L}\p{N}](?:[\p{L}\p{N} ._'-]{0,38}[\p{L}\p{N}._'-])?$/u;
 const MAX_ROUTE = 16 * 1024;
 const GOALS = new Set(['Prise', 'Consolidé', 'Forteresse']);
 const MAX_AGE_MS = 30 * 24 * 3600 * 1000;
@@ -168,22 +170,25 @@ async function joinSquadron(request, env, now) {
   if (!(await underRateLimit(env, await sha256(`join|${ip}`), now, MAX_JOINS_PER_MINUTE))) return fail(429);
   const { body, tooLarge } = await readJson(request, MAX_BODY);
   if (tooLarge) return fail(413);
-  if (!isName(body?.cmdr, 64) || typeof body?.password !== 'string') return fail(400);
+  if (!isName(body?.cmdr, 64) || !CMDR_NAME.test(body.cmdr) || typeof body?.password !== 'string') return fail(400);
   if (!(await sameSecret(body.password, env.JOIN_PASSWORD))) return fail(401);
+  // Inscriptions fermées par le chef (les membres déjà inscrits continuent d'envoyer)
+  const closed = await env.DB.prepare("SELECT value FROM state WHERE key = 'join'").first();
+  if (closed && JSON.parse(closed.value).open === false) return fail(403);
   const token = newToken();
   const hash = await sha256(token);
   const at = new Date(now).toISOString();
+  // members.token_hash ne sert qu'au jeton donné par le chef : une inscription par le code n'y met qu'une valeur inutilisable
   await env.DB.prepare('INSERT INTO members (cmdr, token_hash, created_at) VALUES (?, ?, ?) ON CONFLICT (cmdr) DO NOTHING')
-    .bind(body.cmdr, hash, at).run();
+    .bind(body.cmdr, `code:${newToken()}`, at).run();
   // Le nom tel qu'il a été inscrit la première fois (la casse ne crée pas un second membre)
   const member = await env.DB.prepare('SELECT cmdr FROM members WHERE cmdr = ?').bind(body.cmdr).first();
-  await env.DB.batch([
-    env.DB.prepare('INSERT INTO tokens (token_hash, cmdr, created_at) VALUES (?, ?, ?)').bind(hash, member.cmdr, at),
-    env.DB.prepare(
-      `DELETE FROM tokens WHERE cmdr = ? AND token_hash NOT IN
-       (SELECT token_hash FROM tokens WHERE cmdr = ? ORDER BY created_at DESC, rowid DESC LIMIT ${MAX_TOKENS_PER_CMDR})`
-    ).bind(member.cmdr, member.cmdr),
-  ]);
+  // Au plus MAX_TOKENS_PER_CMDR installations : au-delà, refus (le chef coupe les anciennes depuis sa page)
+  const row = await env.DB.prepare(
+    `INSERT INTO tokens (token_hash, cmdr, created_at)
+     SELECT ?, ?, ? WHERE (SELECT COUNT(*) FROM tokens WHERE cmdr = ?) < ${MAX_TOKENS_PER_CMDR} RETURNING cmdr`
+  ).bind(hash, member.cmdr, at, member.cmdr).first();
+  if (!row) return fail(429);
   return reply(200, { cmdr: member.cmdr, token });
 }
 
@@ -233,6 +238,28 @@ async function putRoute(request, env, now) {
   return reply(200, JSON.parse(value));
 }
 
+/** Couper toutes les installations d'un membre (jetons obtenus avec le code), sans toucher à ses mérites. */
+async function cutTokens(cmdr, env) {
+  await env.DB.prepare('DELETE FROM tokens WHERE cmdr = ?').bind(cmdr).run();
+  return reply(200, { ok: true });
+}
+
+/** Inscriptions ouvertes ou fermées : { open } (ouvertes par défaut). */
+async function getJoin(env) {
+  const row = await env.DB.prepare("SELECT value FROM state WHERE key = 'join'").first();
+  return reply(200, { open: row ? JSON.parse(row.value).open !== false : true });
+}
+
+async function putJoin(request, env) {
+  const { body, tooLarge } = await readJson(request, MAX_BODY);
+  if (tooLarge) return fail(413);
+  if (typeof body?.open !== 'boolean') return fail(400);
+  await env.DB.prepare(
+    "INSERT INTO state (key, value) VALUES ('join', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value"
+  ).bind(JSON.stringify({ open: body.open })).run();
+  return reply(200, { open: body.open });
+}
+
 async function removeMember(cmdr, env) {
   await env.DB.batch([
     env.DB.prepare('DELETE FROM members WHERE cmdr = ?').bind(cmdr),
@@ -256,6 +283,12 @@ export async function handle(request, env, now = Date.now()) {
         || (token && (await memberOf(env, await sha256(token))));
       return ok ? await getRoute(env) : fail(401);
     }
+    if (path === '/admin/join') {
+      if (!(await sameSecret(bearer(request), env.ADMIN_TOKEN))) return fail(401);
+      if (method === 'GET') return await getJoin(env);
+      if (method === 'PUT') return await putJoin(request, env);
+      return fail(405);
+    }
     if (path === '/admin/route') {
       if (!(await sameSecret(bearer(request), env.ADMIN_TOKEN))) return fail(401);
       return method === 'PUT' ? await putRoute(request, env, now) : fail(405);
@@ -271,6 +304,7 @@ export async function handle(request, env, now = Date.now()) {
       if (!(await sameSecret(bearer(request), env.ADMIN_TOKEN))) return fail(401);
       if (path === '/admin/members' && method === 'POST') return await addMember(request, env);
       if (path === '/admin/members' && method === 'GET') return await listMembers(env);
+      if (method === 'DELETE' && path.endsWith('/tokens')) return await cutTokens(decodeURIComponent(path.slice(15, -7)), env);
       if (method === 'DELETE') return await removeMember(decodeURIComponent(path.slice(15)), env);
       return fail(405);
     }
