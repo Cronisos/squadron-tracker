@@ -63,7 +63,7 @@ const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 
 /** Simule Spansh, l'API et Discord, et note les appels Discord dans l'ordre. */
-function fakeServices(records, state) {
+function fakeServices(records, state, { serverRoute = null } = {}) {
   const log = [];
   let nextId = 100;
   globalThis.fetch = async (url, init = {}) => {
@@ -71,9 +71,11 @@ function fakeServices(records, state) {
     const text = String(url);
     if (text.includes('spansh')) {
       const name = decodeURIComponent(text.split('q=')[1]);
-      const k = route.stops.findIndex((s) => s.name === name);
+      const stops = (serverRoute?.route ?? route).stops;
+      const k = stops.findIndex((s) => s.name === name);
       return json({ results: [{ record: { name, ...records[k] } }] });
     }
+    if (text.includes('/v1/route')) return serverRoute ? json(serverRoute) : json({ error: 404 }, 404);
     if (text.includes('/v1/leaderboard')) return json({ leaderboard: [{ cmdr: 'Alpha', merits: 900 }], total: 900 });
     if (text.includes('/v1/state')) {
       if (init.method === 'PUT') { Object.assign(state, JSON.parse(init.body)); return json({ ok: true }); }
@@ -121,4 +123,45 @@ test('premier passage après la mise en place : relevé enregistré, aucun rappo
   await update(env, NOW);
   assert.deepEqual(log, ['PATCH 7']);
   assert.equal(state.report.week, '2026-11-05');
+});
+
+// --- Route lue sur le serveur, et changement de route en cours de semaine ---
+const { routeKey } = await import('../src/run.js');
+
+test('la route du serveur passe avant le secret ROUTE_JSON', async () => {
+  const other = { ...route, stops: [route.stops[0], { name: 'D', goal: 'Prise', merits: 480_000 }] };
+  const report = { week: '2026-11-05', at: '2026-11-05T09:00:00Z', index: 0, done: 0 };
+  const state = { messageId: '7', index: 0, routeKey: routeKey(other), report };
+  const log = fakeServices([at, at], state, { serverRoute: { route: other, version: 3 } });
+  await update(env, NOW);
+  assert.deepEqual(log, ['PATCH 7']);
+  assert.equal(state.routeKey, routeKey(other));
+});
+
+test('route changée (système remplacé) : pas de fausse bannière, relevé de la semaine recalé', async () => {
+  // Avant : A (en cours), B, C. Après : le système 2 remplacé par D, déjà tenu : l'index saute à 2 sans rien valider
+  const before = { messageId: '7', index: 0, routeKey: routeKey(route), report: { week: '2026-11-05', at: '2026-11-05T09:00:00Z', index: 0, done: 0 } };
+  const changed = { ...route, stops: [route.stops[0], { name: 'D', goal: 'Prise', merits: 480_000 }, route.stops[2]] };
+  const log = fakeServices([captured, captured, at], before, { serverRoute: { route: changed, version: 2 } });
+  await update(env, NOW);
+  assert.deepEqual(log, ['PATCH 7'], 'aucune bannière ni rapport');
+  assert.equal(before.index, 2);
+  assert.equal(before.routeKey, routeKey(changed));
+  assert.equal(before.report.index, 2);
+  assert.equal(before.report.rebasedAt, '2026-11-05T10:00:00Z');
+  assert.equal(before.report.week, '2026-11-05');
+});
+
+test('ancien état sans clé de route : adopté sans recalage', async () => {
+  const state = { messageId: '7', index: 0, report: { week: '2026-11-05', at: '2026-11-05T09:00:00Z', index: 0, done: 0 } };
+  const log = fakeServices([at, at, at], state);
+  await update(env, NOW);
+  assert.deepEqual(log, ['PATCH 7']);
+  assert.equal(state.routeKey, routeKey(route));
+  assert.equal(state.report.rebasedAt, undefined);
+});
+
+test('le titre seul ne change pas la clé de route', () => {
+  assert.equal(routeKey({ ...route, title: 'AUTRE' }), routeKey(route));
+  assert.notEqual(routeKey({ ...route, stops: route.stops.slice(1) }), routeKey(route));
 });

@@ -209,13 +209,6 @@ test('mauvais mot de passe, ou inscriptions fermées : refus', async () => {
   assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM members').first().then((r) => r.n), 0);
 });
 
-test('le mot de passe ne permet pas de prendre la place d\'un membre déjà inscrit', async () => {
-  env.JOIN_PASSWORD = 'bon';
-  const first = (await (await join({ cmdr: 'Alpha', password: 'bon' })).json()).token;
-  assert.equal((await join({ cmdr: 'alpha', password: 'bon' })).status, 409);
-  assert.equal((await send(first)).status, 200); // l'ancien jeton marche toujours
-});
-
 test('les essais de mot de passe sont limités par adresse', async () => {
   env.JOIN_PASSWORD = 'bon';
   for (let i = 0; i < 10; i++) assert.equal((await join({ cmdr: 'A', password: `faux${i}` })).status, 401);
@@ -229,4 +222,70 @@ test('le chef liste les membres inscrits', async () => {
   assert.equal((await call('/admin/members', { token: 'faux' })).status, 401);
   const res = await call('/admin/members', { token: 'admin' });
   assert.deepEqual((await res.json()).members.map((m) => m.cmdr), ['Alpha', 'Bravo']);
+});
+
+test('le même nom rejoint plusieurs fois (app, plugin, PC réinstallé) : chaque jeton marche, un seul membre', async () => {
+  env.JOIN_PASSWORD = 'bon';
+  const a = (await (await join({ cmdr: 'Alpha', password: 'bon' })).json()).token;
+  const res = await join({ cmdr: 'alpha', password: 'bon' }, '203.0.113.9');
+  assert.equal(res.status, 200);
+  const b = await res.json();
+  assert.equal(b.cmdr, 'Alpha'); // le nom tel qu'inscrit la première fois
+  assert.notEqual(a, b.token);
+  assert.equal((await send(a)).status, 200);
+  assert.equal((await send(b.token, { at: '2026-11-01T11:30:00Z' })).status, 200);
+  assert.deepEqual(await board(), [{ cmdr: 'Alpha', merits: 200 }]);
+  const list = await (await call('/admin/members', { token: 'admin' })).json();
+  assert.deepEqual(list.members.map((m) => [m.cmdr, m.installations]), [['Alpha', 2]]);
+});
+
+test('au plus 10 installations par commandant : les plus anciennes sautent', async () => {
+  env.JOIN_PASSWORD = 'bon';
+  const tokens = [];
+  for (let i = 0; i < 12; i++) tokens.push((await (await join({ cmdr: 'Alpha', password: 'bon' }, `203.0.113.${i + 20}`)).json()).token);
+  const n = await env.DB.prepare('SELECT COUNT(*) AS n FROM tokens').first();
+  assert.equal(n.n, 10);
+  assert.equal((await send(tokens[11])).status, 200);
+});
+
+test('retirer un membre coupe tous ses jetons', async () => {
+  env.JOIN_PASSWORD = 'bon';
+  const t = (await (await join({ cmdr: 'Alpha', password: 'bon' })).json()).token;
+  assert.equal((await call('/admin/members/Alpha', { method: 'DELETE', token: 'admin' })).status, 200);
+  assert.equal((await send(t)).status, 401);
+});
+
+// --- Route de l'escadron, sur le serveur ---
+const ROUTE = {
+  title: 'ROUTE TEST', power: 'Aisling Duval', since: '2026-11-01T00:00:00Z', meritsPerPoint: 4,
+  stops: [{ name: 'Sol', goal: 'Consolidé', merits: 1880000 }, { name: 'Wolf 359', goal: 'Prise', merits: 480000, extra: 'non' }],
+};
+
+test('le chef publie la route ; le suivi, le chef et les membres la lisent ; versions successives', async () => {
+  assert.deepEqual(await (await call('/v1/route', { token: 'tracker' })).json(), {});
+  assert.equal((await call('/admin/route', { method: 'PUT', token: 'tracker', body: ROUTE })).status, 401);
+  const put = await call('/admin/route', { method: 'PUT', token: 'admin', body: ROUTE });
+  assert.equal(put.status, 200);
+  const v1 = await put.json();
+  assert.equal(v1.version, 1);
+  assert.deepEqual(v1.route.stops[1], { name: 'Wolf 359', goal: 'Prise', merits: 480000 });
+  const token = await member();
+  for (const t of ['tracker', 'admin', token]) assert.equal((await (await call('/v1/route', { token: t })).json()).version, 1);
+  assert.equal((await call('/v1/route', { token: 'faux' })).status, 401);
+  assert.equal((await call('/v1/route')).status, 401);
+  const v2 = await (await call('/admin/route', { method: 'PUT', token: 'admin', body: { ...ROUTE, stops: [ROUTE.stops[0]] } })).json();
+  assert.equal(v2.version, 2);
+});
+
+test('route invalide refusée', async () => {
+  for (const bad of [{}, { ...ROUTE, stops: [] }, { ...ROUTE, stops: [{ name: 'X', goal: 'Domination', merits: 1 }] }, { ...ROUTE, since: 'jeudi' }]) {
+    assert.equal((await call('/admin/route', { method: 'PUT', token: 'admin', body: bad })).status, 400);
+  }
+});
+
+test('l\'état du suivi garde la clé de route et la date de recalage du relevé', async () => {
+  const body = { messageId: '1', index: 0, routeKey: 'abcdef0123456789', report: { week: '2026-10-29', at: '2026-10-29T09:00:00Z', index: 0, done: 5, rebasedAt: '2026-10-30T10:00:00Z' } };
+  assert.equal((await call('/v1/state', { method: 'PUT', token: 'tracker', body })).status, 200);
+  assert.deepEqual(await (await call('/v1/state', { token: 'tracker' })).json(), body);
+  assert.equal((await call('/v1/state', { method: 'PUT', token: 'tracker', body: { ...body, routeKey: 'pas une clé' } })).status, 400);
 });

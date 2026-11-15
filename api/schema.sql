@@ -5,6 +5,15 @@ CREATE TABLE IF NOT EXISTS members (
   created_at TEXT NOT NULL
 );
 
+-- Jetons en plus de celui de members : un par installation (app, plugin, PC réinstallé), obtenus avec le code de
+-- l'escadron. Seule leur empreinte est gardée ; au plus 10 par commandant.
+CREATE TABLE IF NOT EXISTS tokens (
+  token_hash TEXT PRIMARY KEY,
+  cmdr TEXT NOT NULL COLLATE NOCASE,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS tokens_cmdr ON tokens (cmdr);
+
 CREATE TABLE IF NOT EXISTS merits (
   id TEXT PRIMARY KEY,
   cmdr TEXT NOT NULL,

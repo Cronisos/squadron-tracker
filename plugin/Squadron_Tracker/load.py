@@ -4,6 +4,8 @@ Seuls quatre champs quittent le PC, voir build_payload. Tout le reste du journal
 Aucune mise à jour automatique, aucune écriture de fichier, aucun identifiant Frontier.
 """
 
+import base64
+import json
 import logging
 import os
 import queue
@@ -18,7 +20,7 @@ from config import appname, config
 from monitor import monitor
 from timeout_session import new_session
 
-__version__ = '0.2.0'
+__version__ = '0.3.0'
 
 # Serveur par défaut. Chaque escadron peut mettre le sien dans les réglages du plugin : c'est alors l'unique
 # destination, affichée dans ces réglages.
@@ -59,8 +61,31 @@ def server_url() -> str:
     return clean_server(config.get_str(SERVER_KEY, default='') or SERVER_URL)
 
 
+CODE_PREFIX = 'ESC1.'
+
+
+def parse_code(code: str) -> tuple[str, str]:
+    """Code de l'escadron : « ESC1.<base64url de {"u": serveur, "p": mot de passe}> », ou le mot de passe seul.
+
+    Renvoie (serveur ou '', mot de passe). Un code illisible donne ('', '') : rien ne part."""
+    code = (code or '').strip()
+    if not code.startswith(CODE_PREFIX):
+        return '', code
+    try:
+        raw = code[len(CODE_PREFIX):]
+        data = json.loads(base64.urlsafe_b64decode(raw + '=' * (-len(raw) % 4)).decode('utf-8'))
+    except (ValueError, UnicodeDecodeError):
+        return '', ''
+    if not isinstance(data, dict) or not isinstance(data.get('p'), str):
+        return '', ''
+    server = clean_server(data['u']) if isinstance(data.get('u'), str) else ''
+    if data.get('u') and not server:
+        return '', ''
+    return server, data['p']
+
+
 JOIN_MESSAGES = {
-    401: 'Mot de passe refusé',
+    401: "Code de l'escadron refusé",
     404: 'Inscriptions fermées sur ce serveur',
     409: 'Ce commandant est déjà inscrit : demande un nouveau jeton au chef',
     429: "Trop d'essais : attends une minute",
@@ -74,7 +99,7 @@ def join(session: Any, server: str, cmdr: str, password: str) -> tuple[Optional[
     if not cmdr:
         return None, "Lance le jeu une fois : EDMC doit connaître ton commandant"
     if not password:
-        return None, "Entre le mot de passe donné par le chef"
+        return None, "Colle le code de l'escadron"
     try:
         response = session.post(
             f'{server}/v1/join', json={'cmdr': cmdr, 'password': password}, allow_redirects=False
@@ -178,12 +203,17 @@ def on_join() -> None:
     """Bouton « Rejoindre » : inscrit le commandant d'EDMC avec le mot de passe, et garde le jeton reçu."""
     if server_var is None or password_var is None or token_var is None or join_status_var is None:
         return
-    server = clean_server(server_var.get())
-    token, message = join(new_session(), server, prefs_cmdr, password_var.get())
+    code_server, password = parse_code(password_var.get())
+    if password_var.get().strip() and not password:
+        join_status_var.set("Code de l'escadron illisible : recopie-le en entier")
+        return
+    server = code_server or clean_server(server_var.get())
+    token, message = join(new_session(), server, prefs_cmdr, password)
     join_status_var.set(message)
     if token:
         token_var.set(token)
-        password_var.set('')  # le mot de passe n'est jamais gardé
+        server_var.set(server)
+        password_var.set('')  # le code n'est jamais gardé
         config.set(SERVER_KEY, server)
         config.set(TOKEN_KEY, token)
 
@@ -198,7 +228,7 @@ def plugin_prefs(parent: nb.Notebook, cmdr: str, is_beta: bool) -> Optional[tk.F
     token_var = tk.StringVar(value=config.get_str(TOKEN_KEY, default=''))
     nb.Label(frame, text='Serveur de l\'escadron').grid(row=0, column=0, padx=10, pady=4, sticky=tk.W)
     nb.EntryMenu(frame, textvariable=server_var, width=46).grid(row=0, column=1, padx=10, pady=4)
-    nb.Label(frame, text='Mot de passe du chef').grid(row=1, column=0, padx=10, pady=4, sticky=tk.W)
+    nb.Label(frame, text="Code de l'escadron").grid(row=1, column=0, padx=10, pady=4, sticky=tk.W)
     nb.EntryMenu(frame, textvariable=password_var, show='*', width=46).grid(row=1, column=1, padx=10, pady=4)
     nb.Button(frame, text=f'Rejoindre en tant que {prefs_cmdr or "?"}', command=on_join).grid(
         row=2, column=1, padx=10, pady=4, sticky=tk.W

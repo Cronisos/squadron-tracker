@@ -153,7 +153,7 @@ class Join(Base):
         self.assertIs(session.post.call_args.kwargs['allow_redirects'], False)
 
     def test_refus_expliques(self):
-        for status, mot in ((401, 'Mot de passe'), (404, 'fermées'), (409, 'déjà inscrit'), (429, 'essais'), (500, '500')):
+        for status, mot in ((401, 'refusé'), (404, 'fermées'), (409, 'déjà inscrit'), (429, 'essais'), (500, '500')):
             token, message = self.post(status)[1]
             self.assertIsNone(token)
             self.assertIn(mot, message)
@@ -210,6 +210,49 @@ class Deliver(Base):
         session, _ = self.post(200)
         self.assertIs(session.post.call_args.kwargs['allow_redirects'], False)
         self.assertEqual(session.post.call_args.kwargs['headers']['Authorization'], f'Bearer {TOKEN}')
+
+
+
+class Code(Base):
+    def code(self, data):
+        import base64
+        import json
+        raw = base64.urlsafe_b64encode(json.dumps(data).encode()).decode().rstrip('=')
+        return 'ESC1.' + raw
+
+    def test_code_avec_serveur_et_mot_de_passe(self):
+        code = self.code({'u': 'https://api.chef.workers.dev/', 'p': 'mot de passe'})
+        self.assertEqual(self.load.parse_code(code), ('https://api.chef.workers.dev', 'mot de passe'))
+
+    def test_mot_de_passe_seul_et_codes_illisibles(self):
+        self.assertEqual(self.load.parse_code('  simple  '), ('', 'simple'))
+        self.assertEqual(self.load.parse_code('ESC1.%%%'), ('', ''))
+        self.assertEqual(self.load.parse_code(self.code({'u': 'http://pas-https.dev', 'p': 'x'})), ('', ''))
+        self.assertEqual(self.load.parse_code(self.code({'u': 'https://a.dev'})), ('', ''))
+
+    def test_le_bouton_prend_le_serveur_du_code(self):
+        self.load.plugin_prefs(mock.Mock(), 'CMDR Test', False)
+        self.load.server_var = mock.Mock(get=mock.Mock(return_value=self.load.SERVER_URL))
+        self.load.password_var = mock.Mock(get=mock.Mock(return_value=self.code({'u': 'https://chef.example.dev', 'p': 'secret'})))
+        self.load.token_var = mock.Mock()
+        self.load.join_status_var = mock.Mock()
+        session = self.load.new_session.return_value
+        session.post.return_value = mock.Mock(status_code=200, json=mock.Mock(return_value={'token': 'e' * 43}))
+        session.post.side_effect = None
+        self.load.on_join()
+        self.assertEqual(session.post.call_args.args[0], 'https://chef.example.dev/v1/join')
+        self.assertEqual(session.post.call_args.kwargs['json'], {'cmdr': 'CMDR Test', 'password': 'secret'})
+        self.assertEqual(self.load.config.store['squadron_tracker_server'], 'https://chef.example.dev')
+        self.load.server_var.set.assert_called_with('https://chef.example.dev')
+
+    def test_code_illisible_rien_ne_part(self):
+        self.load.plugin_prefs(mock.Mock(), 'CMDR Test', False)
+        self.load.password_var = mock.Mock(get=mock.Mock(return_value='ESC1.%%%'))
+        self.load.join_status_var = mock.Mock()
+        session = self.load.new_session.return_value
+        self.load.on_join()
+        session.post.assert_not_called()
+        self.assertIn('illisible', self.load.join_status_var.set.call_args.args[0])
 
 
 if __name__ == '__main__':

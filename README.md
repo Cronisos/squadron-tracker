@@ -33,12 +33,15 @@ Le fonctionnement et les limites sont décrits dans [SECURITY.md](SECURITY.md).
 4. Lis `load.py` : il est court, et c'est le seul code qui tourne sur ton PC.
 5. Copie le dossier `Squadron_Tracker` dans `%LOCALAPPDATA%\EDMarketConnector\plugins`.
 6. Relance EDMC et lance le jeu une fois, pour qu'EDMC connaisse ton commandant.
-7. Dans Fichier, Paramètres, Squadron Tracker : colle l'adresse du serveur de l'escadron et le mot de passe donnés
-   par le chef, puis clique « Rejoindre en tant que … ». Le plugin reçoit ton jeton et le garde ; le mot de passe,
-   lui, n'est pas gardé. Si le chef t'a donné un jeton à la place, colle-le dans « Jeton du squadron ».
+7. Dans Fichier, Paramètres, Squadron Tracker : colle le **code de l'escadron** (le même pour tous, posté par le chef),
+   puis clique « Rejoindre en tant que … ». Le code contient l'adresse du serveur et son mot de passe. Le plugin reçoit
+   un jeton pour ton commandant et le garde ; le code, lui, n'est pas gardé.
 
-Elite Compagnon fait la même chose dans sa page Escadron. Les deux peuvent tourner ensemble : un même gain ne compte
-qu'une fois.
+Elite Compagnon fait la même chose dans sa page « Rejoindre l'escadron ». Les deux peuvent tourner ensemble, et un
+même commandant peut rejoindre depuis plusieurs installations : un même gain ne compte qu'une fois.
+
+Le code s'écrit `ESC1.` suivi du base64url de `{"u": "<adresse du serveur>", "p": "<mot de passe>"}`. Sans `ESC1.`,
+le texte est pris comme le mot de passe seul, pour le serveur déjà réglé.
 
 Dans les réglages d'EDMC, active aussi l'envoi vers EDDN pour garder la progression à jour sur Spansh. Ces données partent alors de ton EDMC, sans passer par ce projet.
 
@@ -65,6 +68,10 @@ Tests du plugin, avec Python 3.9 ou plus : `python plugin/tests/test_load.py`.
 
 ## Déploiement
 
+Le plus simple : **Elite Compagnon**, page « Serveur de l'escadron (chef) ». Avec une clé d'API Cloudflare et une clé
+GitHub collées une fois, l'app monte la base, le serveur et ses secrets, installe le suivi sur une copie du dépôt et
+l'allume, puis donne le code de l'escadron à poster. Elle gère ensuite les membres et la route. Les étapes ci-dessous
+sont la même chose, à la main.
 
 **API**
 
@@ -78,7 +85,7 @@ npx wrangler secret put JOIN_PASSWORD
 npx wrangler deploy
 ```
 
-Reporte l'identifiant de la base dans `wrangler.toml` avant de déployer. Pour `ADMIN_TOKEN` et `TRACKER_TOKEN`, génère de longues valeurs aléatoires. `JOIN_PASSWORD` est le mot de passe de l'escadron, que tu donnes aux membres : sans lui, les inscriptions sont fermées et seul `members.mjs add` crée des membres. Pour en changer, relance `npx wrangler secret put JOIN_PASSWORD` : les membres déjà inscrits gardent leur jeton.
+Reporte l'identifiant de la base dans `wrangler.toml` avant de déployer. Pour `ADMIN_TOKEN` et `TRACKER_TOKEN`, génère de longues valeurs aléatoires. `JOIN_PASSWORD` est le mot de passe de l'escadron, dans le code que tu postes pour les membres : sans lui, les inscriptions sont fermées et seul `members.mjs add` crée des membres. Pour en changer, relance `npx wrangler secret put JOIN_PASSWORD` : les membres déjà inscrits gardent leur jeton.
 
 **Suivi**
 
@@ -86,7 +93,7 @@ Dans le dépôt GitHub, va dans Settings, Secrets and variables, Actions, et ajo
 
 | Secret | Contenu |
 |---|---|
-| `ROUTE_JSON` | Le contenu de ta route, sur le modèle de `config/route.example.json` |
+| `ROUTE_JSON` | Facultatif : la route de secours, sur le modèle de `config/route.example.json` |
 | `DISCORD_WEBHOOK_URL` | L'adresse du webhook du salon |
 | `API_URL` | L'adresse de l'API, sans `/` final |
 | `TRACKER_TOKEN` | La même valeur que côté API |
@@ -97,8 +104,8 @@ Dans le dépôt GitHub, va dans Settings, Secrets and variables, Actions, et ajo
 
 **Membres**
 
-Avec le mot de passe, chaque membre s'inscrit seul, depuis le plugin ou Elite Compagnon. Un nom déjà inscrit est
-refusé : le mot de passe ne permet pas de prendre la place de quelqu'un. Pour le reste :
+Avec le code de l'escadron, chaque membre s'inscrit seul, depuis le plugin ou Elite Compagnon, autant de fois qu'il
+le faut (au plus 10 installations gardées par commandant). Pour le reste :
 
 ```
 API_URL=... ADMIN_TOKEN=... node api/scripts/members.mjs list
@@ -108,6 +115,14 @@ API_URL=... ADMIN_TOKEN=... node api/scripts/members.mjs remove "Nom CMDR"
 
 `list` montre les inscrits. `add` crée un membre ou lui donne un nouveau jeton (PC réinstallé, jeton perdu) : il
 garde ses mérites. Retirer un membre coupe son jeton et efface ses mérites.
+
+## Route
+
+La route vit sur le serveur : `PUT /admin/route` (clé de chef), ou la page du chef d'Elite Compagnon, qui la reprend
+d'un projet d'extension. Le suivi la relit à chaque passage ; le secret `ROUTE_JSON` ne sert que si le serveur n'en a
+pas encore. Remplacer un système en cours de route ne publie aucune fausse bannière : le suivi voit que la route a
+changé (puissance, systèmes, objectifs), se recale sur la nouvelle, et le rapport du jeudi compte l'avancement depuis
+ce changement, en le disant.
 
 ## Format de la route
 
@@ -119,7 +134,7 @@ garde ses mérites. Retirer un membre coupe son jeton et efface ses mérites.
 
 ## Limites
 
-- Les mérites gagnés quand EDMC est fermé ne sont pas comptés, ni ceux encore en attente d'envoi à sa fermeture.
+- Avec le plugin, les mérites gagnés quand EDMC est fermé ne sont pas comptés, ni ceux encore en attente d'envoi à sa fermeture. Elite Compagnon les rattrape (jusqu'à 30 jours).
 - La progression d'un système ne change sur Spansh que lorsqu'un joueur y passe et envoie ses données vers EDDN. La carte affiche l'âge de la donnée.
 - La barre d'un système inclut le travail des joueurs hors squadron, alors que le classement ne compte que les membres équipés.
 - Les tâches planifiées de GitHub peuvent démarrer en retard, et GitHub les met en pause après une longue période sans activité sur le dépôt.

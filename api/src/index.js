@@ -5,6 +5,9 @@ const MAX_STATE = 4096;
 const MAX_MERITS = 1_000_000; // un seul gain de mérites, largement au-dessus des ventes observées
 const MAX_PER_MINUTE = 120;
 const MAX_JOINS_PER_MINUTE = 10; // essais de mot de passe par adresse et par minute
+const MAX_TOKENS_PER_CMDR = 10; // installations gardées par commandant (les plus anciennes sautent)
+const MAX_ROUTE = 16 * 1024;
+const GOALS = new Set(['Prise', 'Consolidé', 'Forteresse']);
 const MAX_AGE_MS = 30 * 24 * 3600 * 1000;
 const MAX_AHEAD_MS = 5 * 60 * 1000;
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
@@ -64,6 +67,13 @@ export function validMerits(body, now) {
   return { cmdr, system, merits, at };
 }
 
+/** Le commandant d'un jeton (celui donné par le chef, ou un de ceux obtenus avec le code), ou null. */
+async function memberOf(env, tokenHash) {
+  return env.DB.prepare(
+    'SELECT cmdr FROM members WHERE token_hash = ? UNION SELECT cmdr FROM tokens WHERE token_hash = ? LIMIT 1'
+  ).bind(tokenHash, tokenHash).first();
+}
+
 async function underRateLimit(env, tokenHash, now, max = MAX_PER_MINUTE) {
   const minute = Math.floor(now / 60000);
   await env.DB.prepare('DELETE FROM rate WHERE minute < ?').bind(minute - 1).run();
@@ -76,7 +86,7 @@ async function underRateLimit(env, tokenHash, now, max = MAX_PER_MINUTE) {
 
 async function postMerits(request, env, now) {
   const tokenHash = await sha256(bearer(request));
-  const member = await env.DB.prepare('SELECT cmdr FROM members WHERE token_hash = ?').bind(tokenHash).first();
+  const member = await memberOf(env, tokenHash);
   if (!member) return fail(401);
   if (!(await underRateLimit(env, tokenHash, now))) return fail(429);
   const { body, tooLarge } = await readJson(request, MAX_BODY);
@@ -109,7 +119,8 @@ async function getLeaderboard(url, env) {
 function validReport(report) {
   if (report === undefined) return true;
   return /^\d{4}-\d{2}-\d{2}$/.test(report?.week) && TIMESTAMP.test(report.at)
-    && Number.isInteger(report.index) && Number.isFinite(report.done);
+    && Number.isInteger(report.index) && Number.isFinite(report.done)
+    && (report.rebasedAt === undefined || TIMESTAMP.test(report.rebasedAt));
 }
 
 async function getState(env) {
@@ -121,10 +132,11 @@ async function putState(request, env) {
   const { body, tooLarge } = await readJson(request, MAX_STATE);
   if (tooLarge) return fail(413);
   const validId = body?.messageId === undefined || /^\d{1,32}$/.test(body.messageId);
-  if (!body || !validId || !Number.isInteger(body.index) || !validReport(body.report)) return fail(400);
-  const { week, at, index, done } = body.report ?? {};
-  const report = body.report ? { week, at, index, done } : undefined;
-  const value = JSON.stringify({ messageId: body.messageId, index: body.index, report });
+  const validKey = body?.routeKey === undefined || /^[0-9a-f]{8,64}$/.test(body.routeKey);
+  if (!body || !validId || !validKey || !Number.isInteger(body.index) || !validReport(body.report)) return fail(400);
+  const { week, at, index, done, rebasedAt } = body.report ?? {};
+  const report = body.report ? { week, at, index, done, rebasedAt } : undefined;
+  const value = JSON.stringify({ messageId: body.messageId, index: body.index, routeKey: body.routeKey, report });
   await env.DB.prepare(
     "INSERT INTO state (key, value) VALUES ('tracker', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value"
   ).bind(value).run();
@@ -145,9 +157,10 @@ async function addMember(request, env) {
 }
 
 /**
- * Inscription d'un membre avec le mot de passe de l'escadron (secret JOIN_PASSWORD) : renvoie son jeton.
- * Sans mot de passe configuré, les inscriptions sont fermées (404). Un nom déjà inscrit est refusé (409) : le
- * mot de passe ne permet pas de prendre la place d'un membre. Pour un nouveau jeton, le chef passe par /admin.
+ * Inscription avec le code de l'escadron (secret JOIN_PASSWORD), le même pour tous : renvoie un jeton pour ce nom de
+ * commandant. Le même nom peut rejoindre plusieurs fois (app et plugin, PC réinstallé) : chaque installation a son
+ * jeton, au plus MAX_TOKENS_PER_CMDR. Sans code configuré, les inscriptions sont fermées (404). Le code ne prouve
+ * pas qu'on est ce commandant : c'est le choix de l'escadron (un code partagé sur Discord), dit dans SECURITY.md.
  */
 async function joinSquadron(request, env, now) {
   if (!env.JOIN_PASSWORD) return fail(404);
@@ -158,21 +171,72 @@ async function joinSquadron(request, env, now) {
   if (!isName(body?.cmdr, 64) || typeof body?.password !== 'string') return fail(400);
   if (!(await sameSecret(body.password, env.JOIN_PASSWORD))) return fail(401);
   const token = newToken();
-  const row = await env.DB.prepare(
-    'INSERT INTO members (cmdr, token_hash, created_at) VALUES (?, ?, ?) ON CONFLICT (cmdr) DO NOTHING RETURNING cmdr'
-  ).bind(body.cmdr, await sha256(token), new Date(now).toISOString()).first();
-  if (!row) return fail(409);
-  return reply(200, { cmdr: row.cmdr, token });
+  const hash = await sha256(token);
+  const at = new Date(now).toISOString();
+  await env.DB.prepare('INSERT INTO members (cmdr, token_hash, created_at) VALUES (?, ?, ?) ON CONFLICT (cmdr) DO NOTHING')
+    .bind(body.cmdr, hash, at).run();
+  // Le nom tel qu'il a été inscrit la première fois (la casse ne crée pas un second membre)
+  const member = await env.DB.prepare('SELECT cmdr FROM members WHERE cmdr = ?').bind(body.cmdr).first();
+  await env.DB.batch([
+    env.DB.prepare('INSERT INTO tokens (token_hash, cmdr, created_at) VALUES (?, ?, ?)').bind(hash, member.cmdr, at),
+    env.DB.prepare(
+      `DELETE FROM tokens WHERE cmdr = ? AND token_hash NOT IN
+       (SELECT token_hash FROM tokens WHERE cmdr = ? ORDER BY created_at DESC, rowid DESC LIMIT ${MAX_TOKENS_PER_CMDR})`
+    ).bind(member.cmdr, member.cmdr),
+  ]);
+  return reply(200, { cmdr: member.cmdr, token });
 }
 
 async function listMembers(env) {
-  const { results } = await env.DB.prepare('SELECT cmdr, created_at FROM members ORDER BY cmdr').all();
+  const { results } = await env.DB.prepare(
+    `SELECT m.cmdr, m.created_at, (SELECT COUNT(*) FROM tokens t WHERE t.cmdr = m.cmdr) AS installations
+     FROM members m ORDER BY m.cmdr`
+  ).all();
   return reply(200, { members: results });
+}
+
+/** Route de l'escadron, vérifiée ; null si elle ne respecte pas le format (celui de config/route.example.json). */
+export function validRoute(r) {
+  const text = (v, max) => typeof v === 'string' && v.length > 0 && v.length <= max;
+  if (!r || typeof r !== 'object' || !text(r.power, 64) || !TIMESTAMP.test(r.since ?? '')) return null;
+  if (!Array.isArray(r.stops) || r.stops.length < 1 || r.stops.length > 80) return null;
+  const stops = [];
+  for (const s of r.stops) {
+    if (!text(s?.name, 64) || !GOALS.has(s.goal) || !Number.isInteger(s.merits) || s.merits < 1 || s.merits > 50_000_000) return null;
+    stops.push({ name: s.name, goal: s.goal, merits: s.merits, ...(text(s.short, 32) ? { short: s.short } : {}), ...(s.noLarge === true ? { noLarge: true } : {}) });
+  }
+  const ratio = Number.isInteger(r.meritsPerPoint) && r.meritsPerPoint >= 1 && r.meritsPerPoint <= 100 ? r.meritsPerPoint : 4;
+  return {
+    title: text(r.title, 60) ? r.title : 'ROUTE DE L’ESCADRON', subtitle: text(r.subtitle, 80) ? r.subtitle : '',
+    power: r.power, meritsPerPoint: ratio, since: r.since, theme: r.theme === 'prism' ? 'prism' : 'orange', stops,
+  };
+}
+
+/** La route en service : { route, version, updatedAt }, ou {} s'il n'y en a pas encore. */
+async function getRoute(env) {
+  const row = await env.DB.prepare("SELECT value FROM state WHERE key = 'route'").first();
+  return reply(200, row ? JSON.parse(row.value) : {});
+}
+
+/** Nouvelle route (le chef) : version + 1 ; le suivi la prend au passage suivant et se recale sans fausse annonce. */
+async function putRoute(request, env, now) {
+  const { body, tooLarge } = await readJson(request, MAX_ROUTE);
+  if (tooLarge) return fail(413);
+  const route = validRoute(body);
+  if (!route) return fail(400);
+  const old = await env.DB.prepare("SELECT value FROM state WHERE key = 'route'").first();
+  const version = (old ? JSON.parse(old.value).version ?? 0 : 0) + 1;
+  const value = JSON.stringify({ route, version, updatedAt: new Date(now).toISOString().replace(/\.\d{3}Z$/, 'Z') });
+  await env.DB.prepare(
+    "INSERT INTO state (key, value) VALUES ('route', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value"
+  ).bind(value).run();
+  return reply(200, JSON.parse(value));
 }
 
 async function removeMember(cmdr, env) {
   await env.DB.batch([
     env.DB.prepare('DELETE FROM members WHERE cmdr = ?').bind(cmdr),
+    env.DB.prepare('DELETE FROM tokens WHERE cmdr = ?').bind(cmdr),
     env.DB.prepare('DELETE FROM merits WHERE cmdr = ?').bind(cmdr),
   ]);
   return reply(200, { ok: true });
@@ -185,6 +249,17 @@ export async function handle(request, env, now = Date.now()) {
     const path = url.pathname;
     if (path === '/v1/merits' && method === 'POST') return await postMerits(request, env, now);
     if (path === '/v1/join' && method === 'POST') return await joinSquadron(request, env, now);
+    // La route : lisible par le suivi, le chef et les membres inscrits ; modifiable par le chef seul
+    if (path === '/v1/route' && method === 'GET') {
+      const token = bearer(request);
+      const ok = (await sameSecret(token, env.TRACKER_TOKEN)) || (await sameSecret(token, env.ADMIN_TOKEN))
+        || (token && (await memberOf(env, await sha256(token))));
+      return ok ? await getRoute(env) : fail(401);
+    }
+    if (path === '/admin/route') {
+      if (!(await sameSecret(bearer(request), env.ADMIN_TOKEN))) return fail(401);
+      return method === 'PUT' ? await putRoute(request, env, now) : fail(405);
+    }
     if (path === '/v1/leaderboard' || path === '/v1/state') {
       if (!(await sameSecret(bearer(request), env.TRACKER_TOKEN))) return fail(401);
       if (path === '/v1/leaderboard' && method === 'GET') return await getLeaderboard(url, env);
