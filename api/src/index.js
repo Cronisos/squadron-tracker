@@ -178,6 +178,12 @@ async function joinSquadron(request, env, now) {
   const token = newToken();
   const hash = await sha256(token);
   const at = new Date(now).toISOString();
+  // Le nom existait-il déjà (jeton du chef, ou une installation) ? Alors celle-ci devra être confirmée pour les partages
+  const before = await env.DB.prepare(
+    `SELECT (SELECT COUNT(*) FROM tokens WHERE cmdr = ?1) AS installs,
+            (SELECT COUNT(*) FROM members WHERE cmdr = ?1 AND token_hash NOT LIKE 'code:%') AS given`
+  ).bind(body.cmdr).first();
+  const pending = before.installs > 0 || before.given > 0;
   // members.token_hash ne sert qu'au jeton donné par le chef : une inscription par le code n'y met qu'une valeur inutilisable
   await env.DB.prepare('INSERT INTO members (cmdr, token_hash, created_at) VALUES (?, ?, ?) ON CONFLICT (cmdr) DO NOTHING')
     .bind(body.cmdr, `code:${newToken()}`, at).run();
@@ -189,12 +195,17 @@ async function joinSquadron(request, env, now) {
      SELECT ?, ?, ? WHERE (SELECT COUNT(*) FROM tokens WHERE cmdr = ?) < ${MAX_TOKENS_PER_CMDR} RETURNING cmdr`
   ).bind(hash, member.cmdr, at, member.cmdr).first();
   if (!row) return fail(429);
-  return reply(200, { cmdr: member.cmdr, token });
+  if (pending) {
+    await env.DB.prepare('INSERT OR IGNORE INTO pending (token_hash, cmdr, created_at) VALUES (?, ?, ?)').bind(hash, member.cmdr, at).run();
+  }
+  return reply(200, { cmdr: member.cmdr, token, pending });
 }
 
 async function listMembers(env) {
   const { results } = await env.DB.prepare(
-    `SELECT m.cmdr, m.created_at, (SELECT COUNT(*) FROM tokens t WHERE t.cmdr = m.cmdr) AS installations
+    `SELECT m.cmdr, m.created_at, (SELECT COUNT(*) FROM tokens t WHERE t.cmdr = m.cmdr) AS installations,
+       (SELECT COUNT(*) FROM pending p WHERE p.cmdr = m.cmdr) AS pending,
+       (SELECT role FROM member_roles r WHERE r.cmdr = m.cmdr) AS role
      FROM members m ORDER BY m.cmdr`
   ).all();
   return reply(200, { members: results });
@@ -241,6 +252,7 @@ async function putRoute(request, env, now) {
 /** Couper toutes les installations d'un membre (jetons obtenus avec le code), sans toucher à ses mérites. */
 async function cutTokens(cmdr, env) {
   await env.DB.prepare('DELETE FROM tokens WHERE cmdr = ?').bind(cmdr).run();
+  await env.DB.prepare('DELETE FROM pending WHERE cmdr = ?').bind(cmdr).run();
   return reply(200, { ok: true });
 }
 
@@ -265,8 +277,252 @@ async function removeMember(cmdr, env) {
     env.DB.prepare('DELETE FROM members WHERE cmdr = ?').bind(cmdr),
     env.DB.prepare('DELETE FROM tokens WHERE cmdr = ?').bind(cmdr),
     env.DB.prepare('DELETE FROM merits WHERE cmdr = ?').bind(cmdr),
+    env.DB.prepare('DELETE FROM pending WHERE cmdr = ?').bind(cmdr),
+    env.DB.prepare('DELETE FROM member_roles WHERE cmdr = ?').bind(cmdr),
+    env.DB.prepare('DELETE FROM share_targets WHERE cmdr = ? OR share_id IN (SELECT id FROM shares WHERE cmdr = ?)').bind(cmdr, cmdr),
+    env.DB.prepare('DELETE FROM shares WHERE cmdr = ?').bind(cmdr),
   ]);
   return reply(200, { ok: true });
+}
+
+// --- Partage entre membres : rôles (hiérarchie du chef), installations à confirmer, partages adressés ---
+//
+// Vie privée : un partage n'est lisible que par son auteur et ses destinataires. La clé du chef ne donne aucune
+// lecture des partages (elle peut seulement en retirer un par son identifiant). Le code de l'escadron ne prouvant
+// pas l'identité, une installation de plus sous un nom déjà inscrit reste « à confirmer » : elle envoie ses mérites,
+// mais ne lit ni n'écrit aucun partage tant qu'une installation déjà confirmée du même commandant, ou le chef, ne
+// l'a pas acceptée.
+
+const MAX_SHARE = 8 * 1024; // un partage (repère, build, route), en JSON
+const MAX_SHARES_PER_CMDR = 300;
+const MAX_TARGETS = 30;
+const MAX_ROLES = 20;
+const ROLE_ID = /^[a-z0-9][a-z0-9-]{0,23}$/;
+const SHARE_KIND = /^[a-z][a-z0-9-]{0,23}$/;
+const INSTALL_ID = /^[0-9a-f]{12}$/;
+const SHARE_ID = /^[0-9a-f]{32}$/;
+
+/** Le membre d'un jeton, avec l'état de son installation : { cmdr, hash, pending }, ou null. */
+async function installOf(env, request) {
+  const token = bearer(request);
+  if (!token) return null;
+  const hash = await sha256(token);
+  const member = await memberOf(env, hash);
+  if (!member) return null;
+  const pending = await env.DB.prepare('SELECT 1 AS p FROM pending WHERE token_hash = ?').bind(hash).first();
+  return { cmdr: member.cmdr, hash, pending: Boolean(pending) };
+}
+
+async function roleOf(env, cmdr) {
+  return env.DB.prepare(
+    'SELECT r.id, r.name, r.rank FROM member_roles m JOIN roles r ON r.id = m.role WHERE m.cmdr = ?'
+  ).bind(cmdr).first();
+}
+
+async function allRoles(env) {
+  const { results } = await env.DB.prepare('SELECT id, name, rank FROM roles ORDER BY rank DESC, name').all();
+  return results;
+}
+
+/** Moi : mon nom, mon rôle, et mes installations (pour confirmer la nouvelle depuis l'ancienne). */
+async function getMe(env, me) {
+  const { results } = await env.DB.prepare(
+    `SELECT t.token_hash AS hash, t.created_at, (SELECT 1 FROM pending p WHERE p.token_hash = t.token_hash) AS pending
+     FROM tokens t WHERE t.cmdr = ? ORDER BY t.created_at`
+  ).bind(me.cmdr).all();
+  const role = await roleOf(env, me.cmdr);
+  return reply(200, {
+    cmdr: me.cmdr, pending: me.pending, role: role ?? null,
+    installations: results.map((r) => ({ id: r.hash.slice(0, 12), created_at: r.created_at, pending: Boolean(r.pending), current: r.hash === me.hash })),
+  });
+}
+
+/** Confirmer une de mes installations en attente, depuis une installation déjà confirmée. */
+async function approveInstall(env, me, id) {
+  if (!INSTALL_ID.test(id)) return fail(400);
+  const row = await env.DB.prepare(
+    "DELETE FROM pending WHERE cmdr = ? AND substr(token_hash, 1, 12) = ? RETURNING token_hash"
+  ).bind(me.cmdr, id).first();
+  return row ? reply(200, { ok: true }) : fail(404);
+}
+
+/** Les membres et les rôles : visibles de tout membre confirmé (pour choisir à qui partager). */
+async function getMembers(env) {
+  const { results } = await env.DB.prepare(
+    'SELECT m.cmdr, (SELECT role FROM member_roles r WHERE r.cmdr = m.cmdr) AS role FROM members m ORDER BY m.cmdr'
+  ).all();
+  return reply(200, { members: results, roles: await allRoles(env) });
+}
+
+/** Destinataires vérifiés : { audience, role, cmdrs }, ou null. */
+async function validAudience(env, to, sender) {
+  if (!to || typeof to !== 'object') return null;
+  if (to.all === true) return { audience: 'all', role: null, cmdrs: [] };
+  if (typeof to.role === 'string') {
+    if (!ROLE_ID.test(to.role)) return null;
+    const role = await env.DB.prepare('SELECT id FROM roles WHERE id = ?').bind(to.role).first();
+    return role ? { audience: 'role', role: role.id, cmdrs: [] } : null;
+  }
+  if (Array.isArray(to.cmdrs) && to.cmdrs.length >= 1 && to.cmdrs.length <= MAX_TARGETS) {
+    const cmdrs = [];
+    for (const name of to.cmdrs) {
+      if (!isName(name, 64)) return null;
+      const m = await env.DB.prepare('SELECT cmdr FROM members WHERE cmdr = ?').bind(name).first();
+      if (!m) return null; // seulement des membres de l'escadron
+      if (m.cmdr.toLowerCase() !== sender.toLowerCase() && !cmdrs.includes(m.cmdr)) cmdrs.push(m.cmdr);
+    }
+    return cmdrs.length ? { audience: 'cmdrs', role: null, cmdrs } : null;
+  }
+  return null;
+}
+
+/** Créer ou remplacer un de mes partages : { kind, ref, title, data, to }. Même (kind, ref) : même partage. */
+async function putShare(request, env, me, now) {
+  const { body, tooLarge } = await readJson(request, MAX_SHARE + 2048);
+  if (tooLarge) return fail(413);
+  if (!body || typeof body !== 'object' || !SHARE_KIND.test(body.kind ?? '') || !isName(body.ref, 80) || !isName(body.title, 80)) return fail(400);
+  if (!body.data || typeof body.data !== 'object' || Array.isArray(body.data)) return fail(400);
+  const data = JSON.stringify(body.data);
+  if (data.length > MAX_SHARE) return fail(413);
+  const to = await validAudience(env, body.to, me.cmdr);
+  if (!to) return fail(400);
+  const id = (await sha256(`share|${me.cmdr.toLowerCase()}|${body.kind}|${body.ref}`)).slice(0, 32);
+  const at = new Date(now).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const known = await env.DB.prepare('SELECT id FROM shares WHERE id = ?').bind(id).first();
+  if (!known) {
+    const count = await env.DB.prepare('SELECT COUNT(*) AS n FROM shares WHERE cmdr = ?').bind(me.cmdr).first();
+    if (count.n >= MAX_SHARES_PER_CMDR) return fail(429);
+  }
+  await env.DB.prepare(
+    `INSERT INTO shares (id, cmdr, kind, ref, title, data, audience, role, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (id) DO UPDATE SET title = excluded.title, data = excluded.data, audience = excluded.audience,
+       role = excluded.role, updated_at = excluded.updated_at`
+  ).bind(id, me.cmdr, body.kind, body.ref, body.title, data, to.audience, to.role, at, at).run();
+  await env.DB.prepare('DELETE FROM share_targets WHERE share_id = ?').bind(id).run();
+  for (const cmdr of to.cmdrs) {
+    await env.DB.prepare('INSERT OR IGNORE INTO share_targets (share_id, cmdr) VALUES (?, ?)').bind(id, cmdr).run();
+  }
+  return reply(200, { id, updated_at: at });
+}
+
+/**
+ * Ce que je peux lire : mes partages, ceux pour tout l'escadron, ceux pour un rôle au niveau du mien ou en dessous,
+ * et ceux qui me sont adressés. Les destinataires nommés ne sont donnés qu'à l'auteur.
+ */
+async function getShares(env, me) {
+  const role = await roleOf(env, me.cmdr);
+  const rank = role ? role.rank : -1;
+  const { results } = await env.DB.prepare(
+    `SELECT s.id, s.cmdr, s.kind, s.ref, s.title, s.data, s.audience, s.role, s.created_at, s.updated_at
+     FROM shares s
+     WHERE s.cmdr = ?1
+        OR s.audience = 'all'
+        OR (s.audience = 'role' AND EXISTS (SELECT 1 FROM roles r WHERE r.id = s.role AND r.rank <= ?2))
+        OR (s.audience = 'cmdrs' AND EXISTS (SELECT 1 FROM share_targets t WHERE t.share_id = s.id AND t.cmdr = ?1))
+     ORDER BY s.updated_at DESC LIMIT 2000`
+  ).bind(me.cmdr, rank).all();
+  const shares = [];
+  for (const s of results) {
+    const mine = s.cmdr.toLowerCase() === me.cmdr.toLowerCase();
+    let to;
+    if (mine && s.audience === 'cmdrs') {
+      const t = await env.DB.prepare('SELECT cmdr FROM share_targets WHERE share_id = ? ORDER BY cmdr').bind(s.id).all();
+      to = t.results.map((r) => r.cmdr);
+    }
+    let data = {};
+    try {
+      data = JSON.parse(s.data);
+    } catch { /* partage illisible : donné vide */ }
+    shares.push({ ...s, data, mine, ...(to ? { to } : {}) });
+  }
+  return reply(200, { shares, roles: await allRoles(env), role: role ?? null });
+}
+
+async function deleteShare(env, id, cmdr) {
+  if (!SHARE_ID.test(id)) return fail(400);
+  const row = cmdr === null
+    ? await env.DB.prepare('DELETE FROM shares WHERE id = ? RETURNING id').bind(id).first()
+    : await env.DB.prepare('DELETE FROM shares WHERE id = ? AND cmdr = ? RETURNING id').bind(id, cmdr).first();
+  if (!row) return fail(404);
+  await env.DB.prepare('DELETE FROM share_targets WHERE share_id = ?').bind(id).run();
+  return reply(200, { ok: true });
+}
+
+/** Les rôles de l'escadron (le chef) : la liste entière, remplacée. rank : plus grand = plus haut dans la hiérarchie. */
+async function putRoles(request, env) {
+  const { body, tooLarge } = await readJson(request, MAX_STATE);
+  if (tooLarge) return fail(413);
+  if (!Array.isArray(body?.roles) || body.roles.length > MAX_ROLES) return fail(400);
+  const ids = new Set();
+  for (const r of body.roles) {
+    if (!ROLE_ID.test(r?.id ?? '') || ids.has(r.id) || !isName(r.name, 40) || !Number.isInteger(r.rank) || r.rank < 0 || r.rank > 1000) return fail(400);
+    ids.add(r.id);
+  }
+  await env.DB.prepare('DELETE FROM roles').run();
+  for (const r of body.roles) {
+    await env.DB.prepare('INSERT INTO roles (id, name, rank) VALUES (?, ?, ?)').bind(r.id, r.name.trim(), r.rank).run();
+  }
+  // Un rôle retiré : ses membres n'en ont plus (les partages qui le visaient ne sont plus lus que par leur auteur)
+  await env.DB.prepare('DELETE FROM member_roles WHERE role NOT IN (SELECT id FROM roles)').run();
+  return reply(200, { roles: await allRoles(env) });
+}
+
+/** Le rôle d'un membre (le chef) : { role } (identifiant), ou null pour le retirer. */
+async function putMemberRole(request, env, cmdr) {
+  const { body, tooLarge } = await readJson(request, MAX_BODY);
+  if (tooLarge) return fail(413);
+  const member = await env.DB.prepare('SELECT cmdr FROM members WHERE cmdr = ?').bind(cmdr).first();
+  if (!member) return fail(404);
+  if (body?.role === null) {
+    await env.DB.prepare('DELETE FROM member_roles WHERE cmdr = ?').bind(member.cmdr).run();
+    return reply(200, { cmdr: member.cmdr, role: null });
+  }
+  if (typeof body?.role !== 'string' || !ROLE_ID.test(body.role)) return fail(400);
+  const role = await env.DB.prepare('SELECT id FROM roles WHERE id = ?').bind(body.role).first();
+  if (!role) return fail(400);
+  await env.DB.prepare(
+    'INSERT INTO member_roles (cmdr, role) VALUES (?, ?) ON CONFLICT (cmdr) DO UPDATE SET role = excluded.role'
+  ).bind(member.cmdr, role.id).run();
+  return reply(200, { cmdr: member.cmdr, role: role.id });
+}
+
+/** Confirmer les installations en attente d'un membre (le chef). */
+async function approveMember(env, cmdr) {
+  await env.DB.prepare('DELETE FROM pending WHERE cmdr = ?').bind(cmdr).run();
+  return reply(200, { ok: true });
+}
+
+/** Les routes du partage ; null si le chemin n'en est pas une. */
+async function sharing(request, env, url, now) {
+  const { method } = request;
+  const path = url.pathname;
+  if (path === '/admin/roles' || path.startsWith('/admin/shares/')) {
+    if (!(await sameSecret(bearer(request), env.ADMIN_TOKEN))) return fail(401);
+    if (path === '/admin/roles') {
+      if (method === 'GET') return reply(200, { roles: await allRoles(env) });
+      return method === 'PUT' ? putRoles(request, env) : fail(405);
+    }
+    return method === 'DELETE' ? deleteShare(env, path.slice(14), null) : fail(405);
+  }
+  const member = path === '/v1/me' || path === '/v1/members' || path === '/v1/shares' || path.startsWith('/v1/shares/')
+    || path.startsWith('/v1/installations/');
+  if (!member) return null;
+  const me = await installOf(env, request);
+  if (!me) return fail(401);
+  if (!(await underRateLimit(env, me.hash, now))) return fail(429);
+  if (path === '/v1/me') return method === 'GET' ? getMe(env, me) : fail(405);
+  // Installation à confirmer : aucun accès aux membres ni aux partages
+  if (me.pending) return reply(403, { error: 403, pending: true });
+  if (path === '/v1/members') return method === 'GET' ? getMembers(env) : fail(405);
+  if (path === '/v1/shares') {
+    if (method === 'GET') return getShares(env, me);
+    return method === 'PUT' ? putShare(request, env, me, now) : fail(405);
+  }
+  if (path.startsWith('/v1/shares/')) return method === 'DELETE' ? deleteShare(env, path.slice(11), me.cmdr) : fail(405);
+  const approve = /^\/v1\/installations\/([^/]+)\/approve$/.exec(path);
+  if (approve) return method === 'POST' ? approveInstall(env, me, approve[1]) : fail(405);
+  return fail(404);
 }
 
 export async function handle(request, env, now = Date.now()) {
@@ -276,6 +532,8 @@ export async function handle(request, env, now = Date.now()) {
     const path = url.pathname;
     if (path === '/v1/merits' && method === 'POST') return await postMerits(request, env, now);
     if (path === '/v1/join' && method === 'POST') return await joinSquadron(request, env, now);
+    const shared = await sharing(request, env, url, now);
+    if (shared) return shared;
     // La route : lisible par le suivi, le chef et les membres inscrits ; modifiable par le chef seul
     if (path === '/v1/route' && method === 'GET') {
       const token = bearer(request);
@@ -304,6 +562,8 @@ export async function handle(request, env, now = Date.now()) {
       if (!(await sameSecret(bearer(request), env.ADMIN_TOKEN))) return fail(401);
       if (path === '/admin/members' && method === 'POST') return await addMember(request, env);
       if (path === '/admin/members' && method === 'GET') return await listMembers(env);
+      if (method === 'PUT' && path.endsWith('/role')) return await putMemberRole(request, env, decodeURIComponent(path.slice(15, -5)));
+      if (method === 'POST' && path.endsWith('/approve')) return await approveMember(env, decodeURIComponent(path.slice(15, -8)));
       if (method === 'DELETE' && path.endsWith('/tokens')) return await cutTokens(decodeURIComponent(path.slice(15, -7)), env);
       if (method === 'DELETE') return await removeMember(decodeURIComponent(path.slice(15)), env);
       return fail(405);

@@ -43,3 +43,11 @@ Le plugin s'exécute sur le PC des joueurs, avec les mêmes droits qu'EDMC. Il d
 ## Signaler un problème
 
 Ouvre un signalement privé depuis l'onglet Security du dépôt GitHub, sans publier les détails en clair.
+
+## Partage entre membres
+
+- Un partage (repère, build, route) n'est lisible que par son auteur et ses destinataires : tout l'escadron, un rôle et ceux au-dessus, ou des commandants nommés. La liste des destinataires nommés n'est donnée qu'à l'auteur.
+- La clé du chef ne donne **aucune lecture** des partages. Elle peut retirer un partage par son identifiant, gérer les rôles et confirmer une installation.
+- Limite à connaître : celui qui héberge le serveur possède la base de données et pourrait la lire directement chez Cloudflare. Les partages ne sont pas chiffrés de bout en bout.
+- Le code de l'escadron ne prouve pas l'identité. Une installation de plus sous un nom déjà inscrit reste donc « à confirmer » : elle envoie ses mérites, mais ne lit ni n'écrit aucun partage, et ne voit pas la liste des membres, tant qu'une installation déjà confirmée du même commandant, ou le chef, ne l'a pas acceptée.
+- Limites : 8 Ko par partage, 300 partages par commandant, 30 destinataires nommés, 20 rôles.
