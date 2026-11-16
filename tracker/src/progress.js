@@ -33,8 +33,11 @@ export function summarize(route, records, now = Date.now()) {
   const steps = route.stops.map((stop, k) => {
     const goal = GOALS[stop.goal];
     if (!goal) throw new Error(`Objectif inconnu : ${stop.goal}`);
-    const reached = isReached(records[k], route.power, goal);
-    const frac = reached ? 1 : clamp(pointsOf(records[k], route.power) / goal.points, 0, 1);
+    // Atteint : le palier est affiché par le jeu, ou ses points sont déjà tous réunis (le jeu ne change le palier
+    // qu'au passage du jeudi : d'ici là, il n'y a plus rien à y faire, la route passe au système suivant).
+    const points = clamp(pointsOf(records[k], route.power) / goal.points, 0, 1);
+    const reached = isReached(records[k], route.power, goal) || points >= 1;
+    const frac = reached ? 1 : points;
     const left = reached ? 0 : Math.min(stop.merits, (goal.points - goal.points * frac) * ratio);
     return { ...stop, reached, frac, left };
   });

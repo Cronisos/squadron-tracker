@@ -1,6 +1,20 @@
 // Dessine la carte de suivi et la bannière de validation en SVG.
 
+import { readFileSync } from 'node:fs';
 import { ageLabel } from './progress.js';
+
+// Vaisseau de la carte (assets/vaisseau.png, 480 × 313, fond transparent) : le même que le rapport d'Elite Compagnon.
+// Vue de trois quarts, le nez vers le bas à droite, à environ 32° sous l'horizontale.
+const SHIP_PNG = `data:image/png;base64,${readFileSync(new URL('../assets/vaisseau.png', import.meta.url)).toString('base64')}`;
+const SHIP_W = 112;
+const SHIP_H = (SHIP_W * 313) / 480;
+const SHIP_NOSE_DEG = 32;
+// Propulseurs dans le repère du vaisseau redressé (nez à droite), pour une largeur de 90 : x, y, longueur, demi-épaisseur
+const THRUSTERS = [
+  { x: -24.6, y: -1.5, n: 34, h: 3.2 },
+  { x: -37.7, y: 11.5, n: 22, h: 2 },
+  { x: -12.2, y: -18.8, n: 22, h: 2 },
+];
 
 export const WIDTH = 1200;
 export const HEIGHT = 675;
@@ -22,8 +36,20 @@ const merits = (m) =>
     ? `${(m / 1_000_000).toFixed(2).replace('.', ',')} M`
     : `${Math.round(m / 1000)} k`;
 
-const curve = (t) => [75 + 1050 * t, 232 + 62 * Math.sin(t * 7.4 + 0.5)];
-const slope = (t) => (Math.atan2(62 * 7.4 * Math.cos(t * 7.4 + 0.5), 1050) * 180) / Math.PI;
+// Vague ample : deux systèmes voisins ne sont jamais à la même hauteur, leurs noms ne se touchent pas
+const AMPLITUDE = 76;
+const curve = (t) => [75 + 1050 * t, 244 + AMPLITUDE * Math.sin(t * 7.4 + 0.5)];
+const slope = (t) => (Math.atan2(AMPLITUDE * 7.4 * Math.cos(t * 7.4 + 0.5), 1050) * 180) / Math.PI;
+
+/**
+ * Nom complet en deux lignes, pour qu'il tienne entre deux systèmes : « Synuefe OU-E c28-2 » → [« Synuefe »,
+ * « OU-E c28-2 »] ; « HIP 73834 » reste sur une ligne. Jamais abrégé : la carte de la galaxie du jeu ne trouve un
+ * système qu'à son nom complet.
+ */
+export function nameLines(name) {
+  const m = /^(.+?) ([A-Z]{2}-[A-Z] [a-h]\d+(?:-\d+)?)$/.exec(String(name));
+  return m ? [m[1], m[2]] : [String(name)];
+}
 
 function trail(a, b) {
   const points = [];
@@ -82,8 +108,14 @@ function node(step, k, model, c) {
        <circle cx="${x}" cy="${y}" r="25" fill="none" stroke="${c.b}" stroke-width="4" stroke-linecap="round" stroke-dasharray="${(length * model.frac).toFixed(1)} ${length.toFixed(1)}" transform="rotate(-90 ${x} ${y})"/>`
     : '';
   const color = current ? '#fff' : done ? c.b : '#a8a2b2';
-  return `<g ${done || current ? 'filter="url(#glow)"' : ''}>${shape}</g>${ring}
-    <text x="${x}" y="${y + (current ? 50 : 38)}" text-anchor="middle" ${LABEL} font-size="${current ? 21 : 17}" fill="${color}" stroke="${c.bg}" stroke-width="4" paint-order="stroke">${escapeXml(step.short ?? step.name)}</text>`;
+  const lines = step.short ? [step.short] : nameLines(step.name);
+  const top = y + (current ? 48 : 36);
+  const outline = `stroke="${c.bg}" stroke-width="4" paint-order="stroke"`;
+  const first = lines.length > 1
+    ? `<text x="${x}" y="${top}" text-anchor="middle" ${LABEL} font-size="${current ? 17 : 14}" fill="${color}" ${outline}>${escapeXml(lines[0])}</text>`
+    : '';
+  const second = `<text x="${x}" y="${top + (lines.length > 1 ? (current ? 21 : 17) : 4)}" text-anchor="middle" ${LABEL} font-size="${current ? 21 : 17}" fill="${color}" ${outline}>${escapeXml(lines.at(-1))}</text>`;
+  return `<g ${done || current ? 'filter="url(#glow)"' : ''}>${shape}</g>${ring}${first}${second}`;
 }
 
 function shipPosition(model) {
@@ -95,13 +127,16 @@ function shipPosition(model) {
 /** phase va de 0 à 1 et boucle : le vaisseau flotte et sa flamme vacille. */
 function ship(t, phase, c) {
   const [x, y] = curve(t);
-  const hover = 5 * Math.sin(2 * Math.PI * phase);
-  const tail = 66 + 16 * Math.sin(8 * Math.PI * phase);
-  return `<g transform="translate(${x.toFixed(1)} ${(y - 36).toFixed(1)}) rotate(${slope(t).toFixed(1)}) scale(1.25)" filter="url(#glow)">
-    <g transform="translate(0 ${hover.toFixed(2)})">
-    <path d="M-${tail.toFixed(1)} -4 L-24 -3 L-24 3 L-${tail.toFixed(1)} 4 Z" fill="url(#flame)"/>
-    <path d="M30 0 L4 -7 L-10 -19 L-24 -19 L-17 -6 L-25 -3 L-25 3 L-17 6 L-24 19 L-10 19 L4 7 Z" fill="#f3f0f7" stroke="${c.a}" stroke-width="1.5"/>
-    <path d="M18 0 L2 -3.5 L-8 0 L2 3.5 Z" fill="${c.a}"/></g></g>`;
+  const hover = 4 * Math.sin(2 * Math.PI * phase);
+  const flicker = 1 + 0.18 * Math.sin(8 * Math.PI * phase);
+  const k = SHIP_W / 90;
+  const flames = THRUSTERS.map(({ x: fx, y: fy, n, h }) => {
+    const [ax, ay, len, half] = [fx * k, fy * k, n * k * flicker, h * k];
+    return `<path d="M${(ax - len).toFixed(1)} ${(ay - half).toFixed(1)} L${ax.toFixed(1)} ${(ay - half * 0.8).toFixed(1)} L${ax.toFixed(1)} ${(ay + half * 0.8).toFixed(1)} L${(ax - len).toFixed(1)} ${(ay + half).toFixed(1)} Z" fill="url(#flame)"/>`;
+  }).join('');
+  return `<g transform="translate(${x.toFixed(1)} ${(y - 42).toFixed(1)}) rotate(${slope(t).toFixed(1)})">
+    <g transform="translate(0 ${hover.toFixed(2)})">${flames}
+    <g transform="rotate(${-SHIP_NOSE_DEG})"><image href="${SHIP_PNG}" x="${(-SHIP_W / 2).toFixed(1)}" y="${(-SHIP_H / 2).toFixed(1)}" width="${SHIP_W}" height="${SHIP_H.toFixed(1)}"/></g></g></g>`;
 }
 
 function gauge(x, y, r, pct, c) {

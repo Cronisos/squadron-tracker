@@ -138,3 +138,30 @@ test('Discord : un message supprimé est signalé pour être recréé', async ()
   const missing = async () => ({ ok: false, status: 404 });
   assert.equal(await editImage('https://hook', '1', Buffer.from('x'), 'a.gif', 'image/gif', missing), false);
 });
+
+test('Spansh : la fiche du système, pas celle de l’étoile du même nom', async () => {
+  const { fetchSystem } = await import('../src/spansh.js');
+  const reponse = (results) => async () => ({ ok: true, json: async () => ({ results }) });
+  const astre = { type: 'body', record: { name: 'Système Test', updated_at: '2026-11-15T18:57:30Z' } };
+  const systeme = { type: 'system', record: { name: 'Système Test', controlling_power: 'Puissance Test', power_state: 'Exploited' } };
+  assert.equal((await fetchSystem('Système Test', reponse([astre, systeme]))).power_state, 'Exploited');
+  // Réponse sans type (anciennes fiches) : la première du bon nom, comme avant
+  assert.equal((await fetchSystem('Système Test', reponse([{ record: systeme.record }]))).controlling_power, 'Puissance Test');
+  // L'astre seul ne vaut pas une fiche de système
+  await assert.rejects(fetchSystem('Système Test', reponse([astre])), /absent de Spansh/);
+});
+
+test('points tous réunis avant le passage du jeudi : le système est atteint, la route passe au suivant', () => {
+  const route = { title: 'T', subtitle: '', power: 'Puissance Test', meritsPerPoint: 4, stops: [
+    { name: 'Système A', goal: 'Consolidé', merits: 1_880_000 },
+    { name: 'Système B', goal: 'Consolidé', merits: 1_880_000 },
+  ] };
+  const at = '2026-11-15T18:00:00Z';
+  const plein = { controlling_power: 'Puissance Test', power_state: 'Exploited', power_state_control_progress: 1, updated_at: at };
+  const m = summarize(route, [plein, { updated_at: at }], Date.parse(at));
+  assert.equal(m.steps[0].reached, true);
+  assert.equal(m.index, 1);
+  assert.equal(m.current.name, 'Système B');
+  // À 99 %, il reste à faire
+  assert.equal(summarize(route, [{ ...plein, power_state_control_progress: 0.99 }, { updated_at: at }], Date.parse(at)).index, 0);
+});

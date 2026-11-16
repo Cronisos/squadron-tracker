@@ -8,7 +8,10 @@ export async function fetchSystem(name, fetcher = fetch) {
   });
   if (!response.ok) throw new Error(`Spansh a répondu ${response.status} pour ${name}`);
   const data = await response.json();
-  const record = data.results?.find((r) => r.record?.name === name)?.record;
+  // La recherche rend aussi les astres : l'étoile principale porte souvent le nom du système, sans aucune donnée
+  // Powerplay. On prend la fiche de type « system » ; à défaut (réponse sans type), la première qui n'est pas un astre.
+  const exact = (data.results ?? []).filter((r) => r.record?.name === name);
+  const record = (exact.find((r) => r.type === 'system') ?? exact.find((r) => r.type !== 'body'))?.record;
   if (!record) throw new Error(`Système absent de Spansh : ${name}`);
   return record;
 }
