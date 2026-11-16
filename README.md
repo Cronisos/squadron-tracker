@@ -100,7 +100,7 @@ Dans le dépôt GitHub, va dans Settings, Secrets and variables, Actions, et ajo
 
 **Plugin**
 
-`SERVER_URL` de `load.py` est seulement le serveur proposé par défaut : chaque membre peut coller celui de son escadron dans les réglages du plugin. Publie une version avec l'empreinte de son archive.
+Le plugin n’a aucun serveur par défaut (`SERVER_URL` de `load.py` est vide) : chaque membre colle le code de son escadron dans les réglages du plugin, et rien ne part avant. Publie une version avec l'empreinte de son archive.
 
 **Membres**
 

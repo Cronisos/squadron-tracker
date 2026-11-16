@@ -6,7 +6,7 @@ Le plugin s'exécute sur le PC des joueurs, avec les mêmes droits qu'EDMC. Il d
 
 - Il ne réagit qu'à l'événement `PowerplayMerits` du jeu, en galaxie Live.
 - Il envoie seulement quatre champs : nom du commandant, système, mérites gagnés et heure. Voir `build_payload` dans `plugin/Squadron_Tracker/load.py`.
-- Il ne parle qu'à une seule adresse HTTPS : le serveur de l'escadron choisi dans ses réglages (par défaut `SERVER_URL`), affiché en clair. Un nom public seulement : ni adresse IP, ni port, ni chemin. Changer de serveur efface le jeton, qui n'a été donné que par l'ancien.
+- Il ne parle qu'à une seule adresse HTTPS : le serveur de l'escadron choisi dans ses réglages (aucun par défaut : rien ne part tant qu’il n’est pas réglé), affiché en clair. Un nom public seulement : ni adresse IP, ni port, ni chemin. Changer de serveur efface le jeton, qui n'a été donné que par l'ancien.
 - Il ne suit pas les redirections, pour que le jeton ne parte jamais ailleurs.
 
 ## Ce qu'il ne fait pas

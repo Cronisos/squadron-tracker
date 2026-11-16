@@ -22,9 +22,9 @@ from timeout_session import new_session
 
 __version__ = '0.3.0'
 
-# Serveur par défaut. Chaque escadron peut mettre le sien dans les réglages du plugin : c'est alors l'unique
-# destination, affichée dans ces réglages.
-SERVER_URL = 'https://squadron-tracker-api.cronisos.workers.dev'
+# Aucun serveur par défaut : chaque escadron a le sien, donné par le code de l'escadron (ou collé dans les réglages
+# du plugin). Tant qu'aucun n'est réglé, rien ne part. Un escadron peut en inscrire un ici dans sa propre copie.
+SERVER_URL = ''
 
 TOKEN_KEY = 'squadron_tracker_token'
 SERVER_KEY = 'squadron_tracker_server'
@@ -57,7 +57,7 @@ def clean_server(value: str) -> str:
 
 
 def server_url() -> str:
-    """Le serveur choisi dans les réglages, sinon celui par défaut ; '' si aucun n'est valable."""
+    """Le serveur choisi dans les réglages (sinon SERVER_URL, vide à l'origine) ; '' si aucun n'est valable."""
     return clean_server(config.get_str(SERVER_KEY, default='') or SERVER_URL)
 
 
@@ -236,7 +236,7 @@ def plugin_prefs(parent: nb.Notebook, cmdr: str, is_beta: bool) -> Optional[tk.F
     nb.Label(frame, textvariable=join_status_var).grid(row=3, column=1, padx=10, sticky=tk.W)
     nb.Label(frame, text='Jeton du squadron').grid(row=4, column=0, padx=10, pady=4, sticky=tk.W)
     nb.EntryMenu(frame, textvariable=token_var, show='*', width=46).grid(row=4, column=1, padx=10, pady=4)
-    nb.Label(frame, text=f'Destination : {server_url() or "aucune (adresse invalide)"}').grid(
+    nb.Label(frame, text=f'Destination : {server_url() or "aucune : colle le code de ton escadron"}').grid(
         row=5, column=0, columnspan=2, padx=10, sticky=tk.W
     )
     nb.Label(frame, text=f'État : {last_status}').grid(row=6, column=0, columnspan=2, padx=10, sticky=tk.W)

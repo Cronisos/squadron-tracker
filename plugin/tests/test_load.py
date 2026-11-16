@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 TOKEN = 'a' * 43
+SERVER = 'https://escadron.example.dev'
 
 
 def install_stubs():
@@ -15,7 +16,7 @@ def install_stubs():
     config.appname = 'EDMarketConnector'
     config.config = mock.Mock()
     # Réglages d'EDMC simulés : un dictionnaire, lu et écrit par get_str et set
-    config.config.store = {'squadron_tracker_token': TOKEN}
+    config.config.store = {'squadron_tracker_token': TOKEN, 'squadron_tracker_server': SERVER}
     config.config.get_str.side_effect = lambda key, default='': config.config.store.get(key, default)
     config.config.set.side_effect = lambda key, value: config.config.store.__setitem__(key, value)
     monitor = types.ModuleType('monitor')
@@ -90,7 +91,8 @@ class Journal(Base):
         self.assertEqual(self.queued(), 0)
 
     def test_sans_serveur_valable_rien_ne_part(self):
-        self.load.SERVER_URL = ''
+        del self.load.config.store['squadron_tracker_server']
+        self.assertEqual(self.load.SERVER_URL, '')  # aucun serveur par défaut : un autre escadron n'envoie rien ici
         self.load.journal_entry('C', False, 'X', '', self.entry, {})
         self.load.config.store['squadron_tracker_server'] = 'http://pas-en-https.example'
         self.load.journal_entry('C', False, 'X', '', self.entry, {})
@@ -106,8 +108,9 @@ class Server(Base):
                     'https://api.example.dev:8443', 'https://api.example.dev/autre', 'https://a.dev?x=1'):
             self.assertEqual(clean(bad), '', bad)
 
-    def test_le_serveur_choisi_remplace_celui_par_defaut(self):
-        self.assertEqual(self.load.server_url(), self.load.SERVER_URL)
+    def test_sans_reglage_aucun_serveur_puis_celui_choisi(self):
+        del self.load.config.store['squadron_tracker_server']
+        self.assertEqual(self.load.server_url(), '')
         self.load.config.store['squadron_tracker_server'] = 'https://chef.example.dev'
         self.assertEqual(self.load.server_url(), 'https://chef.example.dev')
 
@@ -132,7 +135,7 @@ class Prefs(Base):
         self.assertEqual(self.load.config.store['squadron_tracker_token'], 'b' * 43)
 
     def test_meme_serveur_le_jeton_reste(self):
-        self.vars(self.load.SERVER_URL, TOKEN)
+        self.vars(SERVER, TOKEN)
         self.load.prefs_changed('C', False)
         self.assertEqual(self.load.config.store['squadron_tracker_token'], TOKEN)
 
@@ -232,7 +235,7 @@ class Code(Base):
 
     def test_le_bouton_prend_le_serveur_du_code(self):
         self.load.plugin_prefs(mock.Mock(), 'CMDR Test', False)
-        self.load.server_var = mock.Mock(get=mock.Mock(return_value=self.load.SERVER_URL))
+        self.load.server_var = mock.Mock(get=mock.Mock(return_value=SERVER))
         self.load.password_var = mock.Mock(get=mock.Mock(return_value=self.code({'u': 'https://chef.example.dev', 'p': 'secret'})))
         self.load.token_var = mock.Mock()
         self.load.join_status_var = mock.Mock()
