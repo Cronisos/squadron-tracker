@@ -287,3 +287,92 @@ export function bannerSvg(step, next, { theme = 'orange' } = {}) {
     <text x="180" y="108" ${HUD} font-size="44" fill="#fff">${escapeXml(step.name)}</text>
     <text x="180" y="142" ${LABEL} font-size="22" fill="#c8c3d0">${escapeXml(line)}</text></svg>`;
 }
+
+// --- Rapport d'étape : un système validé, son classement définitif ---
+
+/** Mérites au chiffre près, milliers séparés par une espace : « 1 234 567 ». */
+const exact = (n) => String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+const MEDALS = ['#ffd24a', '#cfd6e4', '#d98a4a']; // or, argent, bronze
+const PODIUM = 3;
+const LISTED = 20; // rangs 4 à 23 sur l'image, en deux colonnes ; la liste complète est dans le texte du message
+
+/** Confettis tirés une fois pour toutes (même image à chaque passage), surtout en haut et sur les côtés. */
+function confetti(c) {
+  let seed = 23;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const colors = [c.a, c.b, '#fff', '#ffd24a', c.flame];
+  let out = '';
+  for (let k = 0; k < 110; k++) {
+    const x = rnd() * WIDTH;
+    const y = rnd() * rnd() * 300;
+    const w = 5 + rnd() * 9;
+    const h = 3 + rnd() * 5;
+    const color = colors[Math.floor(rnd() * colors.length)];
+    out += `<rect x="${x.toFixed(0)}" y="${y.toFixed(0)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" fill="${color}" opacity="${(0.35 + rnd() * 0.55).toFixed(2)}" transform="rotate(${(rnd() * 180).toFixed(0)} ${x.toFixed(0)} ${y.toFixed(0)})"/>`;
+  }
+  return out;
+}
+
+/**
+ * Rapport d'étape, publié quand un système est validé : plus festif que la carte, avec le podium et le classement
+ * définitif des mérites gagnés dans ce système. `board` : [{ cmdr, merits }] déjà trié ; `total` et `cmdrs` : somme et
+ * nombre de commandants pour tout le système (au-delà de ce que l'image montre).
+ */
+export function stepReportSvg(step, next, { board = [], total = 0, cmdrs = board.length, theme = 'orange', number = null, count = null } = {}) {
+  const c = THEMES[theme];
+  const place = number && count ? `ÉTAPE ${number} SUR ${count} · ` : '';
+  const after = next ? `Prochaine étape : ${next.name} · ${next.goal}` : 'Route terminée';
+  const podium = board.slice(0, PODIUM).map((row, k) => {
+    const y = 262 + k * 104;
+    return `<circle cx="92" cy="${y + 34}" r="${k ? 30 : 34}" fill="${MEDALS[k]}" filter="url(#glow)"/>
+      <text x="92" y="${y + 45}" text-anchor="middle" ${HUD} font-size="${k ? 28 : 32}" fill="#17100a">${k + 1}</text>
+      <text x="146" y="${y + 30}" ${LABEL_BOLD} font-size="${k ? 28 : 34}" fill="#fff">${escapeXml(row.cmdr.slice(0, 22))}</text>
+      <text x="146" y="${y + 62}" ${LABEL} font-size="24" fill="${MEDALS[k]}">${exact(row.merits)} mérites</text>`;
+  }).join('');
+  const rest = board.slice(PODIUM, PODIUM + LISTED);
+  const rows = rest.map((row, k) => {
+    const col = k < LISTED / 2 ? 0 : 1;
+    const x = 592 + col * 288;
+    const y = 262 + (k % (LISTED / 2)) * 33;
+    return `<text x="${x}" y="${y}" ${HUD} font-size="15" fill="#a8a2b2">${k + PODIUM + 1}</text>
+      <text x="${x + 30}" y="${y}" ${LABEL} font-size="20" fill="#fff">${escapeXml(row.cmdr.slice(0, 16))}</text>
+      <text x="${x + 262}" y="${y}" text-anchor="end" ${LABEL} font-size="19" fill="${c.b}">${exact(row.merits)}</text>`;
+  }).join('');
+  const hidden = Math.max(0, cmdrs - PODIUM - rest.length);
+  const more = hidden ? `<text x="1146" y="622" text-anchor="end" ${LABEL} font-size="18" fill="#a8a2b2">+ ${hidden} autre${hidden > 1 ? 's' : ''} : liste complète dans le message</text>` : '';
+  const empty = board.length ? '' : `<text x="62" y="320" ${LABEL} font-size="24" fill="#c8c3d0">Aucun mérite enregistré dans ce système.</text>`;
+  const alone = board.length && !rest.length ? `<text x="592" y="290" ${LABEL} font-size="21" fill="#a8a2b2">Tout le monde est sur le podium.</text>` : '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" width="${WIDTH}" height="${HEIGHT}">${background(c, HEIGHT)}${confetti(c)}
+    <polygon points="${hexagon(96, 96, 54)}" fill="url(#done)" filter="url(#glow)"/>
+    <path d="M72 98 L89 116 L123 78" fill="none" stroke="#17100a" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="180" y="62" ${LABEL} font-size="24" letter-spacing="3" fill="${c.a}" stroke="${c.bg}" stroke-width="5" paint-order="stroke">${escapeXml(`${place}SYSTÈME VALIDÉ · ${step.goal}`.toUpperCase())}</text>
+    <text x="180" y="120" ${HUD} font-size="54" fill="#fff" stroke="${c.bg}" stroke-width="6" paint-order="stroke">${escapeXml(step.name)}</text>
+    <text x="180" y="158" ${LABEL} font-size="23" fill="#c8c3d0" stroke="${c.bg}" stroke-width="5" paint-order="stroke">${escapeXml(after)}</text>
+    <g transform="translate(1070 96) rotate(-12)"><g transform="rotate(${-SHIP_NOSE_DEG})"><image href="${SHIP_PNG}" x="${-SHIP_W * 0.7}" y="${(-SHIP_H * 0.7).toFixed(1)}" width="${SHIP_W * 1.4}" height="${(SHIP_H * 1.4).toFixed(1)}"/></g></g>
+    ${panel(36, 196, 500, 448, c, 'PODIUM')}${podium}${empty}
+    <text x="62" y="604" ${LABEL} font-size="21" fill="#c8c3d0">Total du système</text>
+    <text x="62" y="630" ${LABEL_BOLD} font-size="25" fill="#fff">${exact(total)} mérites · ${cmdrs} commandant${cmdrs > 1 ? 's' : ''}</text>
+    ${panel(560, 196, 604, 448, c, 'CLASSEMENT DÉFINITIF')}${rows}${alone}${more}</svg>`;
+}
+
+/**
+ * Le même classement en texte, sous l'image : tous les commandants reçus (100 au plus), au mérite près. Les noms sont
+ * écrits tels quels, sans mise en forme possible (caractères de Discord neutralisés), et le tout tient en 2 000
+ * caractères : au-delà, les derniers sont comptés, pas listés.
+ */
+export function stepReportText(step, { board = [], total = 0, cmdrs = board.length } = {}) {
+  const plain = (s) => String(s).replace(/[\\*_~`|>@#:[\]()]/g, (ch) => `\\${ch}`);
+  const head = `**Classement définitif · ${plain(step.name)} (${plain(step.goal)})**`;
+  const foot = `Total : ${exact(total)} mérites · ${cmdrs} commandant${cmdrs > 1 ? 's' : ''}`;
+  if (!board.length) return `${head}\nAucun mérite enregistré dans ce système.`;
+  const lines = [];
+  let size = head.length + foot.length + 60;
+  for (const [k, row] of board.entries()) {
+    const line = `${k + 1}. ${plain(row.cmdr)} : ${exact(row.merits)}`;
+    if (size + line.length + 1 > 1900) break;
+    lines.push(line);
+    size += line.length + 1;
+  }
+  const left = cmdrs - lines.length;
+  return [head, ...lines, ...(left > 0 ? [`… et ${left} autre${left > 1 ? 's' : ''}`] : []), foot].join('\n');
+}

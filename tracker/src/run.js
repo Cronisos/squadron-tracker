@@ -2,7 +2,7 @@
 
 import { createHash } from 'node:crypto';
 import { animatedCard } from './animation.js';
-import { bannerSvg, reportSvg } from './card.js';
+import { bannerSvg, reportSvg, stepReportSvg, stepReportText } from './card.js';
 import { deleteMessage, editImage, postImage } from './discord.js';
 import { pngFrom } from './render.js';
 import { summarize } from './progress.js';
@@ -23,9 +23,11 @@ function api(env) {
     state: () => call('/v1/state'),
     route: () => call('/v1/route'),
     saveState: (state) => call('/v1/state', { method: 'PUT', body: JSON.stringify(state) }),
-    leaderboard: (since, until) => {
+    leaderboard: (since, until, { system, limit } = {}) => {
       const end = until ? `&until=${encodeURIComponent(until)}` : '';
-      return call(`/v1/leaderboard?since=${encodeURIComponent(since)}${end}`);
+      const only = system ? `&system=${encodeURIComponent(system)}` : '';
+      const max = limit ? `&limit=${limit}` : '';
+      return call(`/v1/leaderboard?since=${encodeURIComponent(since)}${end}${only}${max}`);
     },
   };
 }
@@ -70,6 +72,25 @@ async function weeklyReport(remote, route, model, step) {
   }));
 }
 
+/**
+ * Annonce d'un système validé : le rapport d'étape, avec le classement définitif des mérites gagnés dans ce système
+ * depuis le départ de la route (image, et liste complète en texte : c'est elle qui sert à récompenser). Serveur
+ * d'avant cette version (il ne sait pas classer par système) : la simple bannière, plutôt qu'un classement faux.
+ */
+async function stepAnnouncement(remote, route, model, k) {
+  const step = model.steps[k];
+  const next = model.steps[k + 1];
+  let ranking = null;
+  try {
+    ranking = await remote.leaderboard(route.since, undefined, { system: step.name, limit: 100 });
+  } catch {
+    ranking = null;
+  }
+  if (!ranking || ranking.system !== step.name) return { image: pngFrom(bannerSvg(step, next, { theme: route.theme })) };
+  const options = { board: ranking.leaderboard, total: ranking.total, cmdrs: ranking.cmdrs, theme: route.theme, number: k + 1, count: model.steps.length };
+  return { image: pngFrom(stepReportSvg(step, next, options)), content: stepReportText(step, options) };
+}
+
 export async function update(env, now = Date.now()) {
   const webhook = env.DISCORD_WEBHOOK_URL;
   const remote = api(env);
@@ -90,13 +111,13 @@ export async function update(env, now = Date.now()) {
   const announcements = [];
   // Une bannière par étape franchie depuis la dernière mise à jour
   for (let k = changed ? model.index : state.index ?? model.index; k < model.index; k++) {
-    announcements.push(pngFrom(bannerSvg(model.steps[k], model.steps[k + 1], { theme: route.theme })));
+    announcements.push(await stepAnnouncement(remote, route, model, k));
   }
-  if (step.due) announcements.push(await weeklyReport(remote, route, model, step));
+  if (step.due) announcements.push({ image: await weeklyReport(remote, route, model, step) });
 
   let { messageId } = state;
   if (announcements.length) {
-    for (const [k, image] of announcements.entries()) await postImage(webhook, image, `annonce-${k}.png`, PNG);
+    for (const [k, a] of announcements.entries()) await postImage(webhook, a.image, `annonce-${k}.png`, PNG, fetch, a.content);
     // Annonces enregistrées avant de toucher à la carte : une panne ne les republiera pas
     await remote.saveState({ messageId, index: model.index, routeKey: key, report: step.snapshot });
     // La carte repasse sous les annonces : d'abord la nouvelle, pour ne jamais laisser le salon sans carte

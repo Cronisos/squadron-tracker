@@ -165,3 +165,23 @@ test('points tous réunis avant le passage du jeudi : le système est atteint, l
   // À 99 %, il reste à faire
   assert.equal(summarize(route, [{ ...plein, power_state_control_progress: 0.99 }, { updated_at: at }], Date.parse(at)).index, 0);
 });
+
+test('rapport d\'étape : podium, classement, noms neutralisés, texte borné', async () => {
+  const { stepReportSvg, stepReportText } = await import('../src/card.js');
+  const step = { name: 'Système Test', goal: 'Consolidé' };
+  const board = Array.from({ length: 30 }, (_, i) => ({ cmdr: i ? `Testeur ${i}` : '<x> *gras* @everyone', merits: 1_234_567 - i * 1000 }));
+  const svg = stepReportSvg(step, { name: 'Suivant', goal: 'Prise' }, { board, total: 9_999_999, cmdrs: 30, number: 2, count: 12 });
+  assert.match(svg, /ÉTAPE 2 SUR 12 · SYSTÈME VALIDÉ · CONSOLIDÉ/);
+  assert.match(svg, /1 234 567 mérites/);
+  assert.match(svg, /\+ 7 autres/);
+  assert.ok(!svg.includes('<x>'));
+  assert.ok(pngFrom(svg).length > 1000);
+  assert.match(stepReportSvg(step, undefined, {}), /Aucun mérite enregistré/);
+  const texte = stepReportText(step, { board, total: 9_999_999, cmdrs: 30 });
+  assert.match(texte, /^\*\*Classement définitif · Système Test \(Consolidé\)\*\*/);
+  assert.ok(texte.includes('\\*gras\\*') && texte.includes('\\@everyone'), 'mise en forme et mentions neutralisées');
+  assert.match(texte, /30\. Testeur 29 : 1 205 567/);
+  const long = stepReportText(step, { board: Array.from({ length: 100 }, (_, i) => ({ cmdr: `Commandant au nom très long numéro ${i}`, merits: 5 })), total: 500, cmdrs: 100 });
+  assert.ok(long.length <= 2000);
+  assert.match(long, /… et \d+ autres/);
+});

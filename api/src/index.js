@@ -108,14 +108,23 @@ async function getLeaderboard(url, env) {
   const since = url.searchParams.get('since') || '1970-01-01T00:00:00Z';
   const until = url.searchParams.get('until') || '9999-12-31T23:59:59Z';
   if (!TIMESTAMP.test(since) || !TIMESTAMP.test(until)) return fail(400);
+  // system : seulement les mérites gagnés dans ce système (rapport d'étape, classement définitif). limit : 10 par
+  // défaut, 100 au plus. La réponse redit le système : le suivi sait ainsi que le serveur a bien filtré.
+  const system = url.searchParams.get('system');
+  if (system !== null && (system.length < 1 || system.length > 120)) return fail(400);
+  const asked = url.searchParams.get('limit');
+  const limit = asked === null ? 10 : Number(asked);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) return fail(400);
+  const where = `at >= ? AND at < ?${system !== null ? ' AND system = ? COLLATE NOCASE' : ''}`;
+  const args = system !== null ? [since, until, system] : [since, until];
   const { results } = await env.DB.prepare(
-    `SELECT cmdr, SUM(merits) AS merits FROM merits WHERE at >= ? AND at < ?
-     GROUP BY cmdr ORDER BY merits DESC, cmdr ASC LIMIT 10`
-  ).bind(since, until).all();
-  const sum = await env.DB.prepare('SELECT COALESCE(SUM(merits), 0) AS total FROM merits WHERE at >= ? AND at < ?')
-    .bind(since, until)
+    `SELECT cmdr, SUM(merits) AS merits FROM merits WHERE ${where}
+     GROUP BY cmdr ORDER BY merits DESC, cmdr ASC LIMIT ${limit}`
+  ).bind(...args).all();
+  const sum = await env.DB.prepare(`SELECT COALESCE(SUM(merits), 0) AS total, COUNT(DISTINCT cmdr) AS cmdrs FROM merits WHERE ${where}`)
+    .bind(...args)
     .first();
-  return reply(200, { leaderboard: results, total: sum.total });
+  return reply(200, { leaderboard: results, total: sum.total, cmdrs: sum.cmdrs, ...(system !== null ? { system } : {}) });
 }
 
 function validReport(report) {

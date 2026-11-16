@@ -138,7 +138,26 @@ test('le classement d\'une semaine exclut ce qui suit sa fin et donne le total',
   await send(token, { at: '2026-11-01T10:00:00Z', merits: 100 });
   await send(token, { at: '2026-11-01T11:30:00Z', merits: 50 });
   const res = await call('/v1/leaderboard?since=2026-11-01T09:00:00Z&until=2026-11-01T11:00:00Z', { token: 'tracker' });
-  assert.deepEqual(await res.json(), { leaderboard: [{ cmdr: 'Alpha', merits: 100 }], total: 100 });
+  assert.deepEqual(await res.json(), { leaderboard: [{ cmdr: 'Alpha', merits: 100 }], total: 100, cmdrs: 1 });
+});
+
+test('le classement d\'un système ne compte que ses mérites, et redit le système', async () => {
+  const alpha = await member();
+  const bravo = await member('Bravo');
+  await send(alpha, { system: 'Système A', at: '2026-11-01T10:00:00Z', merits: 100 });
+  await send(alpha, { system: 'Système B', at: '2026-11-01T10:10:00Z', merits: 900 });
+  await call('/v1/merits', { method: 'POST', token: bravo, body: { cmdr: 'Bravo', system: 'système a', merits: 300, at: '2026-11-01T10:20:00Z' } });
+  const res = await call(`/v1/leaderboard?system=${encodeURIComponent('Système A')}&limit=100`, { token: 'tracker' });
+  assert.deepEqual(await res.json(), {
+    leaderboard: [{ cmdr: 'Bravo', merits: 300 }, { cmdr: 'Alpha', merits: 100 }], total: 400, cmdrs: 2, system: 'Système A',
+  });
+  // limit : le nombre de lignes, pas le total
+  const un = await (await call(`/v1/leaderboard?system=${encodeURIComponent('Système A')}&limit=1`, { token: 'tracker' })).json();
+  assert.equal(un.leaderboard.length, 1);
+  assert.equal(un.cmdrs, 2);
+  for (const mauvais of ['limit=0', 'limit=101', 'limit=abc', 'system=']) {
+    assert.equal((await call(`/v1/leaderboard?${mauvais}`, { token: 'tracker' })).status, 400, mauvais);
+  }
 });
 
 test('le relevé du rapport hebdomadaire est gardé et validé', async () => {

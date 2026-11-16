@@ -19,6 +19,12 @@ La progression des systèmes vient des données publiques de [Spansh](https://sp
 
 Réserve le salon au bot, en lecture seule pour les joueurs. La carte est modifiée sur place à chaque mise à jour. Quand une bannière ou un rapport est publié, elle est republiée dessous pour rester le dernier message.
 
+Quand un système est validé, le suivi publie un **rapport d'étape** qui reste dans le salon : le podium et le classement
+définitif des mérites gagnés dans ce système depuis le départ de la route, en image, et la liste complète au mérite près
+dans le texte du message (c'est elle qui sert à récompenser). Il demande pour cela au serveur le classement du système
+(`/v1/leaderboard?system=…&limit=100`) ; avec un serveur d'avant cette version, il publie la simple bannière. Seuls
+comptent les mérites envoyés par l'app ou le plugin des membres inscrits.
+
 Le rapport part le jeudi après 9 h UTC. Le premier passage enregistre seulement un relevé de départ : le premier rapport arrive le jeudi suivant.
 
 ## Sécurité

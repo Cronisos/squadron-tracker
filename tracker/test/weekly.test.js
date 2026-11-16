@@ -63,7 +63,7 @@ const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 
 /** Simule Spansh, l'API et Discord, et note les appels Discord dans l'ordre. */
-function fakeServices(records, state, { serverRoute = null } = {}) {
+function fakeServices(records, state, { serverRoute = null, parSysteme = false, contenus = [] } = {}) {
   const log = [];
   let nextId = 100;
   globalThis.fetch = async (url, init = {}) => {
@@ -76,12 +76,17 @@ function fakeServices(records, state, { serverRoute = null } = {}) {
       return json({ results: [{ record: { name, ...records[k] } }] });
     }
     if (text.includes('/v1/route')) return serverRoute ? json(serverRoute) : json({ error: 404 }, 404);
-    if (text.includes('/v1/leaderboard')) return json({ leaderboard: [{ cmdr: 'Alpha', merits: 900 }], total: 900 });
+    if (text.includes('/v1/leaderboard')) {
+      // Serveur à jour : il classe par système et le redit ; serveur d'avant : il ignore la demande
+      const system = new URL(text).searchParams.get('system');
+      return json({ leaderboard: [{ cmdr: 'Alpha', merits: 900 }], total: 900, ...(system && parSysteme ? { cmdrs: 1, system } : {}) });
+    }
     if (text.includes('/v1/state')) {
       if (init.method === 'PUT') { Object.assign(state, JSON.parse(init.body)); return json({ ok: true }); }
       return json(state);
     }
     log.push(init.method === 'POST' ? `POST ${init.body.get('files[0]').name}` : `${init.method} ${text.split('/').pop()}`);
+    if (init.method === 'POST') contenus.push(JSON.parse(init.body.get('payload_json')).content ?? null);
     return init.method === 'POST' ? json({ id: String(nextId++) }) : new Response(null, { status: init.method === 'DELETE' ? 204 : 200 });
   };
   return log;
@@ -164,4 +169,24 @@ test('ancien état sans clé de route : adopté sans recalage', async () => {
 test('le titre seul ne change pas la clé de route', () => {
   assert.equal(routeKey({ ...route, title: 'AUTRE' }), routeKey(route));
   assert.notEqual(routeKey({ ...route, stops: route.stops.slice(1) }), routeKey(route));
+});
+
+test('système validé, serveur à jour : rapport d\'étape avec le classement définitif en texte', async () => {
+  const state = { messageId: '7', index: 0, report: { week: '2026-11-05', at: '2026-11-05T09:00:00Z', index: 0, done: 0 } };
+  const contenus = [];
+  const log = fakeServices([captured, at, at], state, { parSysteme: true, contenus });
+  await update(env, NOW);
+  assert.deepEqual(log, ['POST annonce-0.png', 'POST route.gif', 'DELETE 7']);
+  assert.match(contenus[0], /Classement définitif/);
+  assert.match(contenus[0], /1\. Alpha : 900/);
+  assert.match(contenus[0], /Total : 900 mérites · 1 commandant$/);
+  assert.equal(contenus[1], null, 'la carte, elle, n\'a pas de texte');
+});
+
+test('système validé, serveur d\'avant : la simple bannière, sans classement', async () => {
+  const state = { messageId: '7', index: 0, report: { week: '2026-11-05', at: '2026-11-05T09:00:00Z', index: 0, done: 0 } };
+  const contenus = [];
+  fakeServices([captured, at, at], state, { contenus });
+  await update(env, NOW);
+  assert.equal(contenus[0], null);
 });
