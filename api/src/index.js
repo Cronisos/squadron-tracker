@@ -304,6 +304,10 @@ async function removeMember(cmdr, env) {
 // l'a pas acceptée.
 
 const MAX_SHARE = 8 * 1024; // un partage (repère, build, route), en JSON
+// Partage chiffré de bout en bout (data.e2e) : le contenu chiffré, plus une clé enveloppée par installation destinataire
+const MAX_SHARE_E2E = 24 * 1024;
+// Clé publique d'une installation : X25519 brute, 32 octets en base64
+const PUBLIC_KEY = /^[A-Za-z0-9+/]{43}=$/;
 const MAX_SHARES_PER_CMDR = 300;
 const MAX_TARGETS = 30;
 const MAX_ROLES = 20;
@@ -356,12 +360,38 @@ async function approveInstall(env, me, id) {
   return row ? reply(200, { ok: true }) : fail(404);
 }
 
-/** Les membres et les rôles : visibles de tout membre confirmé (pour choisir à qui partager). */
+/**
+ * Les membres et les rôles : visibles de tout membre confirmé (pour choisir à qui partager). Avec, pour chacun, les
+ * clés publiques de ses installations confirmées (keys) : de quoi chiffrer un partage pour lui.
+ */
 async function getMembers(env) {
   const { results } = await env.DB.prepare(
     'SELECT m.cmdr, (SELECT role FROM member_roles r WHERE r.cmdr = m.cmdr) AS role FROM members m ORDER BY m.cmdr'
   ).all();
-  return reply(200, { members: results, roles: await allRoles(env) });
+  const keys = await env.DB.prepare(
+    `SELECT k.cmdr, k.public_key FROM install_keys k JOIN tokens t ON t.token_hash = k.token_hash
+     WHERE NOT EXISTS (SELECT 1 FROM pending p WHERE p.token_hash = k.token_hash) ORDER BY k.created_at`
+  ).all();
+  const byCmdr = new Map();
+  for (const k of keys.results) {
+    const id = String(k.cmdr).toLowerCase();
+    if (!byCmdr.has(id)) byCmdr.set(id, []);
+    if (byCmdr.get(id).length < MAX_TOKENS_PER_CMDR) byCmdr.get(id).push(k.public_key);
+  }
+  return reply(200, { members: results.map((m) => ({ ...m, keys: byCmdr.get(String(m.cmdr).toLowerCase()) ?? [] })), roles: await allRoles(env) });
+}
+
+/** Publier la clé publique de cette installation : { key }. Remplace la précédente. */
+async function putKey(request, env, me, now) {
+  const { body, tooLarge } = await readJson(request, 1024);
+  if (tooLarge) return fail(413);
+  if (!body || typeof body.key !== 'string' || !PUBLIC_KEY.test(body.key)) return fail(400);
+  const at = new Date(now).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  await env.DB.prepare(
+    `INSERT INTO install_keys (token_hash, cmdr, public_key, created_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(token_hash) DO UPDATE SET public_key = excluded.public_key, created_at = excluded.created_at`
+  ).bind(me.hash, me.cmdr, body.key, at).run();
+  return reply(200, { ok: true });
 }
 
 /** Destinataires vérifiés : { audience, role, cmdrs }, ou null. */
@@ -388,12 +418,12 @@ async function validAudience(env, to, sender) {
 
 /** Créer ou remplacer un de mes partages : { kind, ref, title, data, to }. Même (kind, ref) : même partage. */
 async function putShare(request, env, me, now) {
-  const { body, tooLarge } = await readJson(request, MAX_SHARE + 2048);
+  const { body, tooLarge } = await readJson(request, MAX_SHARE_E2E + 2048);
   if (tooLarge) return fail(413);
   if (!body || typeof body !== 'object' || !SHARE_KIND.test(body.kind ?? '') || !isName(body.ref, 80) || !isName(body.title, 80)) return fail(400);
   if (!body.data || typeof body.data !== 'object' || Array.isArray(body.data)) return fail(400);
   const data = JSON.stringify(body.data);
-  if (data.length > MAX_SHARE) return fail(413);
+  if (data.length > (body.data.e2e === 1 ? MAX_SHARE_E2E : MAX_SHARE)) return fail(413);
   const to = await validAudience(env, body.to, me.cmdr);
   if (!to) return fail(400);
   const id = (await sha256(`share|${me.cmdr.toLowerCase()}|${body.kind}|${body.ref}`)).slice(0, 32);
@@ -515,7 +545,7 @@ async function sharing(request, env, url, now) {
     }
     return method === 'DELETE' ? deleteShare(env, path.slice(14), null) : fail(405);
   }
-  const member = path === '/v1/me' || path === '/v1/members' || path === '/v1/shares' || path.startsWith('/v1/shares/')
+  const member = path === '/v1/me' || path === '/v1/members' || path === '/v1/key' || path === '/v1/shares' || path.startsWith('/v1/shares/')
     || path.startsWith('/v1/installations/');
   if (!member) return null;
   const me = await installOf(env, request);
@@ -525,6 +555,7 @@ async function sharing(request, env, url, now) {
   // Installation à confirmer : aucun accès aux membres ni aux partages
   if (me.pending) return reply(403, { error: 403, pending: true });
   if (path === '/v1/members') return method === 'GET' ? getMembers(env) : fail(405);
+  if (path === '/v1/key') return method === 'PUT' ? putKey(request, env, me, now) : fail(405);
   if (path === '/v1/shares') {
     if (method === 'GET') return getShares(env, me);
     return method === 'PUT' ? putShare(request, env, me, now) : fail(405);

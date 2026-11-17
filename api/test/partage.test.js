@@ -183,7 +183,7 @@ test('rôles : le chef seul, liste vérifiée, un rôle retiré quitte ses membr
   assert.equal((await admin('/admin/members/Inconnu/role', { method: 'PUT', body: { role: 'amiral' } })).status, 404);
   assert.equal((await admin('/admin/members/Alpha/role', { method: 'PUT', body: { role: 'inconnu' } })).status, 400);
   const liste = (await call('/v1/members', { token: a })).json;
-  assert.deepEqual(liste.members, [{ cmdr: 'Alpha', role: 'amiral' }]);
+  assert.deepEqual(liste.members, [{ cmdr: 'Alpha', role: 'amiral', keys: [] }]);
   assert.deepEqual(liste.roles.map((r) => r.id), ['amiral', 'lieutenant', 'recrue']); // du plus haut au plus bas
   assert.equal((await call('/v1/me', { token: a })).json.role.id, 'amiral');
   await admin('/admin/roles', { method: 'PUT', body: { roles: ROLES.slice(0, 2) } });
@@ -210,4 +210,34 @@ test('un membre retiré : ses partages et ce qui lui était adressé partent ave
   const reste = await env.DB.prepare('SELECT COUNT(*) AS n FROM share_targets').first();
   assert.equal(reste.n, 0);
   assert.equal((await call('/v1/shares', { token: a })).status, 401);
+});
+
+test('clés publiques : chaque installation publie la sienne, les membres les voient ; partage chiffré jusqu’à 24 Ko', async () => {
+  const cle = (n) => `${String(n).repeat(43)}=`;
+  const alpha = (await join('Alpha')).token;
+  const bravo = (await join('Bravo')).token;
+  assert.equal((await call('/v1/key', { method: 'PUT', token: alpha, body: { key: cle('A') } })).status, 200);
+  assert.equal((await call('/v1/key', { method: 'PUT', token: alpha, body: { key: cle('B') } })).status, 200, 'remplace la précédente');
+  assert.equal((await call('/v1/key', { method: 'PUT', token: bravo, body: { key: cle('C') } })).status, 200);
+  for (const mauvais of [{}, { key: 'courte' }, { key: `${'A'.repeat(44)}` }, { key: 42 }]) {
+    assert.equal((await call('/v1/key', { method: 'PUT', token: alpha, body: mauvais })).status, 400, JSON.stringify(mauvais));
+  }
+  assert.equal((await call('/v1/key', { method: 'PUT', body: { key: cle('A') } })).status, 401, 'sans jeton');
+  assert.equal((await call('/v1/key', { token: alpha })).status, 405);
+  const { members } = (await call('/v1/members', { token: bravo })).json;
+  assert.deepEqual(members.find((m) => m.cmdr === 'Alpha').keys, [cle('B')]);
+  assert.deepEqual(members.find((m) => m.cmdr === 'Bravo').keys, [cle('C')]);
+  // Une seconde installation au même nom attend sa confirmation : sa clé n'est pas distribuée, elle ne peut pas en publier
+  const second = (await join('Alpha')).token;
+  assert.equal((await call('/v1/key', { method: 'PUT', token: second, body: { key: cle('D') } })).status, 403);
+  // Partage chiffré : le serveur range l'enveloppe telle quelle, et accepte plus gros qu'un partage en clair
+  const enveloppe = { e2e: 1, eph: cle('E'), iv: 'aXY=', ct: 'x'.repeat(12_000), cles: [{ a: '0123456789abcdef', iv: 'aXY=', w: 'dw==' }] };
+  assert.equal((await share(alpha, { cmdrs: ['Bravo'] }, { title: 'Partage chiffré', data: enveloppe })).status, 200);
+  const recu = (await call('/v1/shares', { token: bravo })).json.shares.find((s) => s.ref === 'r1');
+  assert.deepEqual(recu.data, enveloppe);
+  assert.equal((await share(alpha, { cmdrs: ['Bravo'] }, { data: { ...enveloppe, ct: 'x'.repeat(25_000) } })).status, 413);
+  assert.equal((await share(alpha, { cmdrs: ['Bravo'] }, { data: { texte: 'x'.repeat(12_000) } })).status, 413, 'en clair : toujours 8 Ko');
+  // Membre retiré : ses clés ne sont plus distribuées
+  await admin('/admin/members/Bravo', { method: 'DELETE' });
+  assert.ok(!(await call('/v1/members', { token: alpha })).json.members.some((m) => m.cmdr === 'Bravo'));
 });

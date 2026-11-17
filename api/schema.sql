@@ -70,6 +70,16 @@ CREATE TABLE IF NOT EXISTS shares (
 );
 CREATE INDEX IF NOT EXISTS shares_cmdr ON shares (cmdr);
 
+-- Clé publique de chaque installation (X25519, 32 octets en base64) : sert aux autres membres à chiffrer un partage
+-- pour elle. Le serveur ne détient aucune clé privée et ne peut pas lire un partage chiffré.
+CREATE TABLE IF NOT EXISTS install_keys (
+  token_hash TEXT PRIMARY KEY,
+  cmdr TEXT NOT NULL COLLATE NOCASE,
+  public_key TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS install_keys_cmdr ON install_keys (cmdr);
+
 CREATE TABLE IF NOT EXISTS share_targets (
   share_id TEXT NOT NULL,
   cmdr TEXT NOT NULL COLLATE NOCASE,
