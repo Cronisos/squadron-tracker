@@ -214,7 +214,8 @@ async function listMembers(env) {
   const { results } = await env.DB.prepare(
     `SELECT m.cmdr, m.created_at, (SELECT COUNT(*) FROM tokens t WHERE t.cmdr = m.cmdr) AS installations,
        (SELECT COUNT(*) FROM pending p WHERE p.cmdr = m.cmdr) AS pending,
-       (SELECT role FROM member_roles r WHERE r.cmdr = m.cmdr) AS role
+       (SELECT role FROM member_roles r WHERE r.cmdr = m.cmdr) AS role,
+       (SELECT MAX(x.at) FROM merits x WHERE x.cmdr = m.cmdr) AS last_merit_at
      FROM members m ORDER BY m.cmdr`
   ).all();
   return reply(200, { members: results });

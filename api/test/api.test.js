@@ -333,3 +333,13 @@ test('l\'état du suivi garde la clé de route et la date de recalage du relevé
   assert.deepEqual(await (await call('/v1/state', { token: 'tracker' })).json(), body);
   assert.equal((await call('/v1/state', { method: 'PUT', token: 'tracker', body: { ...body, routeKey: 'pas une clé' } })).status, 400);
 });
+
+test('liste des membres : la date du dernier mérite reçu de chacun (null s’il n’a jamais rien envoyé)', async () => {
+  const alpha = await member();
+  await member('Bravo');
+  await send(alpha, { at: '2026-11-01T10:00:00Z', merits: 100 });
+  await send(alpha, { at: '2026-11-01T11:00:00Z', merits: 50 });
+  const { members } = await (await call('/admin/members', { token: 'admin' })).json();
+  assert.equal(members.find((m) => m.cmdr === 'Alpha').last_merit_at, '2026-11-01T11:00:00Z');
+  assert.equal(members.find((m) => m.cmdr === 'Bravo').last_merit_at, null);
+});
