@@ -14,6 +14,19 @@ const TIERS = {
 
 const clamp = (n, low, high) => Math.min(high, Math.max(low, n));
 
+const WEEK_MS = 7 * 24 * 3600 * 1000;
+/** Le jeu valide les paliers à son passage hebdomadaire : le jeudi à 7 h UTC. */
+const TICK_HOUR_UTC = 7;
+
+/** Part de la semaine Powerplay déjà écoulée, de 0 (jeudi 7 h UTC) à 1 (juste avant le jeudi suivant). */
+export function weekProgress(now = Date.now()) {
+  const d = new Date(now);
+  const back = (d.getUTCDay() - 4 + 7) % 7;
+  let tick = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - back, TICK_HOUR_UTC);
+  if (tick > now) tick -= WEEK_MS;
+  return clamp((now - tick) / WEEK_MS, 0, 1);
+}
+
 function pointsOf(record, power) {
   if (record.controlling_power === power) {
     const tier = TIERS[record.power_state];
@@ -33,13 +46,15 @@ export function summarize(route, records, now = Date.now()) {
   const steps = route.stops.map((stop, k) => {
     const goal = GOALS[stop.goal];
     if (!goal) throw new Error(`Objectif inconnu : ${stop.goal}`);
-    // Atteint : le palier est affiché par le jeu, ou ses points sont déjà tous réunis (le jeu ne change le palier
-    // qu'au passage du jeudi : d'ici là, il n'y a plus rien à y faire, la route passe au système suivant).
+    // Atteint : le palier est affiché par le jeu. « pending » : ses points sont tous réunis, mais le jeu ne change le
+    // palier qu'au passage du jeudi. D'ici là il n'y a plus rien à y faire, et le système suivant n'est pas encore
+    // à portée : la route attend, le vaisseau fait le trajet (card.js).
     const points = clamp(pointsOf(records[k], route.power) / goal.points, 0, 1);
-    const reached = isReached(records[k], route.power, goal) || points >= 1;
+    const reached = isReached(records[k], route.power, goal);
+    const pending = !reached && points >= 1;
     const frac = reached ? 1 : points;
-    const left = reached ? 0 : Math.min(stop.merits, (goal.points - goal.points * frac) * ratio);
-    return { ...stop, reached, frac, left };
+    const left = reached || pending ? 0 : Math.min(stop.merits, (goal.points - goal.points * frac) * ratio);
+    return { ...stop, reached, pending, frac, left };
   });
   const firstOpen = steps.findIndex((s) => !s.reached);
   const index = firstOpen < 0 ? steps.length : firstOpen;
@@ -53,6 +68,10 @@ export function summarize(route, records, now = Date.now()) {
     index,
     current: steps[index] ?? null,
     frac: steps[index]?.frac ?? 1,
+    // Étape en cours complète, en attente du jeudi ; `transit` : la part de la semaine déjà écoulée (le vaisseau
+    // avance d'autant vers le système suivant)
+    pending: steps[index]?.pending === true,
+    transit: weekProgress(now),
     total,
     done: Math.max(0, total - left),
     ageMs: Number.isNaN(updated) ? null : Math.max(0, now - updated),

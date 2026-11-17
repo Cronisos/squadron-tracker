@@ -118,10 +118,45 @@ function node(step, k, model, c) {
   return `<g ${done || current ? 'filter="url(#glow)"' : ''}>${shape}</g>${ring}${first}${second}`;
 }
 
+/**
+ * Chaque tronçon entre deux systèmes se parcourt en deux temps : sa première part (TRANSIT) pendant l'attente du
+ * jeudi, une fois le système d'avant complet ; le reste au rythme des mérites du système visé. Le vaisseau n'est donc
+ * jamais « déjà arrivé » sur un système où l'on ne peut pas encore travailler, et il ne recule jamais.
+ */
+const TRANSIT = 0.6;
+
 function shipPosition(model) {
   const last = model.steps.length - 1;
+  if (!model.current) return 1;
+  if (last < 1) return 0;
+  // En attente du jeudi : parti du système complet, en route vers le suivant (s'il y en a un)
+  if (model.pending) return Math.min(1, (model.index + (model.index < last ? TRANSIT * model.transit : 0)) / last);
   if (model.index === 0) return 0;
-  return model.current ? (model.index - 1 + model.frac) / last : 1;
+  return (model.index - 1 + TRANSIT + (1 - TRANSIT) * model.frac) / last;
+}
+
+const CHEVRON_BLUE = '#4fb4ff';
+/**
+ * Flèches sans queue, bleues, le long de la route entre le vaisseau et le système suivant, qui s'illuminent en vague
+ * vers l'avant : le vaisseau fait route, le système suivant n'est pas encore ouvert. Seulement en attente du jeudi.
+ */
+function chevrons(model, phase) {
+  const last = model.steps.length - 1;
+  if (!model.pending || model.index >= last) return '';
+  // Sur tout le tronçon, du système complet au suivant : le vaisseau les survole en avançant
+  const from = model.index / last;
+  const to = (model.index + 1) / last;
+  const count = 6;
+  let out = '';
+  for (let k = 0; k < count; k++) {
+    const t = from + (to - from) * (0.16 + (0.7 * k) / (count - 1));
+    const [x, y] = curve(t);
+    // La vague part du vaisseau et court vers le système suivant
+    const wave = Math.max(0, Math.cos(2 * Math.PI * (phase - k / count)));
+    const opacity = (0.22 + 0.78 * wave ** 3).toFixed(2);
+    out += `<path d="M-6 -9 L5 0 L-6 9" transform="translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${slope(t).toFixed(1)})" fill="none" stroke="${CHEVRON_BLUE}" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" opacity="${opacity}"/>`;
+  }
+  return `<g filter="url(#glow)">${out}</g>`;
 }
 
 /** phase va de 0 à 1 et boucle : le vaisseau flotte et sa flamme vacille. */
@@ -153,6 +188,15 @@ function currentPanel(model, c) {
   const step = model.current;
   if (!step) {
     return `${head}${gauge(x + 104, y + 130, 66, 100, c)}<text x="${x + 196}" y="${y + 122}" ${LABEL_BOLD} font-size="34" fill="#fff">Route terminée</text>`;
+  }
+  if (model.pending) {
+    // Palier atteint, pas encore validé par le jeu : rien à faire ici, et le système suivant n'est pas encore à portée
+    const next = model.steps[model.index + 1];
+    return `${panel(x, y, 420, 232, c, 'EN ATTENTE DU JEUDI')}${gauge(x + 104, y + 130, 66, 100, c)}
+    <text x="${x + 196}" y="${y + 92}" ${LABEL_BOLD} font-size="33" fill="#fff">${escapeXml(step.name)}</text>
+    <text x="${x + 196}" y="${y + 126}" ${LABEL} font-size="23" fill="${c.b}">Palier ${escapeXml(step.goal)} atteint</text>
+    <text x="${x + 196}" y="${y + 158}" ${LABEL} font-size="21" fill="#c8c3d0">Validé jeudi, au passage du jeu</text>
+    <text x="${x + 196}" y="${y + 190}" ${LABEL} font-size="21" fill="${CHEVRON_BLUE}">${escapeXml(next ? `En route vers ${next.name}` : 'Dernière étape')}</text>`;
   }
   const warning = step.noLarge
     ? `<path d="M${x + 196} ${y + 196} l9 -16 l9 16 Z" fill="#ffc94d"/><text x="${x + 220}" y="${y + 196}" ${LABEL} font-size="19" fill="#ffc94d">Pas de grand pad</text>`
@@ -216,7 +260,7 @@ export function cardSvg(model, { board = [], boardTitle = 'CLASSEMENT', theme = 
     <text x="${WIDTH - 38}" y="82" text-anchor="end" ${LABEL} font-size="19" fill="#c8c3d0">${escapeXml(sourceNote || ageLabel(model.ageMs))}</text>
     <polyline points="${trail(0, 1)}" fill="none" stroke="#fff" stroke-opacity=".28" stroke-width="2" stroke-dasharray="3 9" stroke-linecap="round"/>
     ${t > 0 ? `<polyline points="${trail(0, t)}" fill="none" stroke="${c.a}" stroke-width="4" filter="url(#glow)"/>` : ''}
-    ${model.steps.map((step, k) => node(step, k, model, c)).join('')}${ship(t, phase, c)}
+    ${chevrons(model, phase)}${model.steps.map((step, k) => node(step, k, model, c)).join('')}${ship(t, phase, c)}
     ${currentPanel(model, c)}${routePanel(model, c)}${boardPanel(board, boardTitle, c)}</svg>`;
 }
 

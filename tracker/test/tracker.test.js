@@ -151,19 +151,42 @@ test('Spansh : la fiche du système, pas celle de l’étoile du même nom', asy
   await assert.rejects(fetchSystem('Système Test', reponse([astre])), /absent de Spansh/);
 });
 
-test('points tous réunis avant le passage du jeudi : le système est atteint, la route passe au suivant', () => {
+test('points tous réunis avant le passage du jeudi : en attente, le vaisseau fait route vers le suivant sans y être', async () => {
+  const { weekProgress } = await import('../src/progress.js');
   const route = { title: 'T', subtitle: '', power: 'Puissance Test', meritsPerPoint: 4, stops: [
     { name: 'Système A', goal: 'Consolidé', merits: 1_880_000 },
     { name: 'Système B', goal: 'Consolidé', merits: 1_880_000 },
+    { name: 'Système C', goal: 'Prise', merits: 480_000 },
   ] };
   const at = '2026-11-15T18:00:00Z';
   const plein = { controlling_power: 'Puissance Test', power_state: 'Exploited', power_state_control_progress: 1, updated_at: at };
-  const m = summarize(route, [plein, { updated_at: at }], Date.parse(at));
-  assert.equal(m.steps[0].reached, true);
-  assert.equal(m.index, 1);
-  assert.equal(m.current.name, 'Système B');
-  // À 99 %, il reste à faire
-  assert.equal(summarize(route, [{ ...plein, power_state_control_progress: 0.99 }, { updated_at: at }], Date.parse(at)).index, 0);
+  const vide = { updated_at: at };
+  // Dimanche soir : A est complet mais pas encore Consolidé pour le jeu
+  const dimanche = Date.parse('2026-11-15T19:00:00Z');
+  const m = summarize(route, [plein, vide, vide], dimanche);
+  assert.equal(m.index, 0, 'A reste l’étape en cours jusqu’au jeudi');
+  assert.equal(m.pending, true);
+  assert.equal(m.steps[0].reached, false);
+  assert.equal(m.steps[0].left, 0, 'plus rien à y faire');
+  assert.equal(m.transit, 0.5, "dimanche 19 h UTC : la moitié de la semaine");
+  const svg = cardSvg(m, { phase: 0.25 });
+  assert.match(svg, /EN ATTENTE DU JEUDI/);
+  assert.match(svg, /Palier Consolidé atteint/);
+  assert.match(svg, /En route vers Système B/);
+  assert.ok((svg.match(/stroke="#4fb4ff"/g) || []).length >= 3, 'flèches bleues vers le système suivant');
+  assert.ok(pngFrom(svg).length > 1000);
+  // À 99 %, il reste à faire : pas d'attente, pas de flèches
+  const presque = summarize(route, [{ ...plein, power_state_control_progress: 0.99 }, vide, vide], dimanche);
+  assert.equal(presque.pending, false);
+  assert.ok(!cardSvg(presque).includes('#4fb4ff'));
+  // Jeudi passé : A est Consolidé, B devient l'étape en cours ; le vaisseau n'a pas reculé
+  const valide = summarize(route, [{ ...plein, power_state: 'Fortified', power_state_control_progress: 0 }, vide, vide], Date.parse('2026-11-19T09:00:00Z'));
+  assert.equal(valide.index, 1);
+  assert.equal(valide.pending, false);
+  // Semaine Powerplay : de 0 le jeudi à 7 h UTC à presque 1 juste avant le suivant
+  assert.equal(weekProgress(Date.parse('2026-11-12T07:00:00Z')), 0);
+  assert.ok(weekProgress(Date.parse('2026-11-19T06:59:00Z')) > 0.999);
+  assert.equal(weekProgress(Date.parse('2026-11-19T07:00:00Z')), 0);
 });
 
 test('rapport d\'étape : podium, classement, noms neutralisés, texte borné', async () => {
