@@ -119,11 +119,12 @@ function node(step, k, model, c) {
 }
 
 /**
- * Chaque tronçon entre deux systèmes se parcourt en deux temps : sa première part (TRANSIT) pendant l'attente du
- * jeudi, une fois le système d'avant complet ; le reste au rythme des mérites du système visé. Le vaisseau n'est donc
- * jamais « déjà arrivé » sur un système où l'on ne peut pas encore travailler, et il ne recule jamais.
+ * Le vaisseau est au-dessus du système où l'on travaille : dès qu'un système s'ouvre (passage du jeudi), il y est, et
+ * il y reste tant qu'on y gagne des mérites ; l'anneau du système dit où l'on en est (l’auteur, 19 nov. 2026). Il ne
+ * voyage que pendant l'attente du jeudi, une fois le système complet : il parcourt alors TRANSIT du tronçon vers le
+ * suivant au fil de la semaine, sans jamais être « déjà arrivé » sur un système encore fermé.
  */
-const TRANSIT = 0.6;
+const TRANSIT = 0.9;
 
 function shipPosition(model) {
   const last = model.steps.length - 1;
@@ -131,8 +132,7 @@ function shipPosition(model) {
   if (last < 1) return 0;
   // En attente du jeudi : parti du système complet, en route vers le suivant (s'il y en a un)
   if (model.pending) return Math.min(1, (model.index + (model.index < last ? TRANSIT * model.transit : 0)) / last);
-  if (model.index === 0) return 0;
-  return (model.index - 1 + TRANSIT + (1 - TRANSIT) * model.frac) / last;
+  return model.index / last;
 }
 
 const CHEVRON_BLUE = '#4fb4ff';
